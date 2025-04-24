@@ -1,7 +1,7 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom';
-import { ActionMode } from '../ActionMode'; // Adjust path as needed
+import { ActionMode } from '../modes/action-mode/ActionMode'; // Adjust path as needed
 
 describe('ActionMode Component', () => {
   test('renders placeholder content', () => {

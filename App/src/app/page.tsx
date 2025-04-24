@@ -2,8 +2,8 @@
 
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from "framer-motion";
-import { ActionMode } from '@/components/ActionMode';
-import { WalkthroughMode } from '@/components/WalkthroughMode';
+import { ActionMode } from '@/components/modes/action-mode/ActionMode';
+import { WalkthroughMode } from '@/components/modes/walkthrough-mode/WalkthroughMode';
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"; // Added import
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";

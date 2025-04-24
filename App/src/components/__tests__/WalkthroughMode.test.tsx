@@ -1,7 +1,7 @@
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import '@testing-library/jest-dom';
-import { WalkthroughMode } from '../WalkthroughMode';
+import { WalkthroughMode } from '../modes/walkthrough-mode/WalkthroughMode';
 import { invoke } from '@tauri-apps/api/core'; // Import the original path
 
 // Mock the core module - Jest will automatically use the __mocks__ version
