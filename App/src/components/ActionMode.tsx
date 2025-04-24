@@ -72,12 +72,9 @@ export function ActionMode() {
       animate={{ opacity: 1 }}
       transition={{ duration: 0.3 }}
       // Consistent padding and structure with WalkthroughMode
-      className="flex flex-col h-full w-full max-w-3xl mx-auto p-4" // Use max-w-3xl like Walkthrough
+      className="flex flex-col h-full w-full p-4" // Removed max-w-3xl mx-auto
     >
-      {/* Description (optional, could be removed for cleaner look) */}
-      <p className="text-sm text-muted-foreground mb-4 text-center shrink-0">
-        Enter the computer problem or task you want the AI to perform.
-      </p>
+      {/* Removed Description Text */}
 
       {/* Message Area using ScrollArea */}
       <ScrollArea className="flex-grow mb-4 pr-4 -mr-4">
@@ -118,18 +115,19 @@ export function ActionMode() {
 
 
       {/* Input Bar at the bottom - Consistent with WalkthroughMode */}
-      <div className="flex space-x-2 items-center border-t pt-4 shrink-0"> {/* Added shrink-0 */}
+      <div className="flex space-x-2 items-center border-t pt-4"> {/* Reverted py-4 to pt-4 */}
         <Input
-          placeholder="e.g., change my wallpaper, clear browser cache"
+          placeholder="Type your problem..."
           value={task}
           onChange={(e) => setTask(e.target.value)}
           onKeyPress={(e) => e.key === 'Enter' && handleSubmit()}
           disabled={isLoading}
-          className="flex-1"
+          className="flex-1 h-12" // Reduced height to h-12
           aria-label="Task input"
         />
-        <Button onClick={handleSubmit} disabled={isLoading || !task.trim()} size="icon" aria-label="Submit task">
-          <Send className="h-4 w-4" />
+        {/* Adjusted button size to match input */}
+        <Button onClick={handleSubmit} disabled={isLoading || !task.trim()} className="h-12 w-12" aria-label="Submit task">
+          <Send className="h-5 w-5" /> {/* Adjusted icon size */}
         </Button>
       </div>
     </motion.div>

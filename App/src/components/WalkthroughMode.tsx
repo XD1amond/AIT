@@ -357,21 +357,22 @@ export function WalkthroughMode() { // Removed props
       {/* Input Bar - Consistent with ActionMode */}
       <div className="flex space-x-2 items-center border-t pt-4">
         <Input
-          placeholder="Type your question..."
+          placeholder="Type your problem..."
           value={userInput}
           onChange={(e) => setUserInput(e.target.value)}
           onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
           disabled={isLoading} // Keep simplified disabled logic for now
-          className="flex-1" // Input takes remaining width
+          className="flex-1 h-12" // Reduced height to h-12
           aria-label="Chat input"
         />
+        {/* Adjusted button size to match input */}
         <Button
             onClick={handleSendMessage}
             disabled={isLoading || !userInput.trim()} // Keep simplified disabled logic
-            size="icon"
+            className="h-12 w-12" // Reduced height to h-12 w-12
             aria-label="Send message"
         >
-          <Send className="h-4 w-4" />
+          <Send className="h-5 w-5" /> {/* Adjusted icon size */}
         </Button>
       </div>
     </motion.div>
