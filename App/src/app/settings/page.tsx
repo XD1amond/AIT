@@ -22,6 +22,7 @@ interface AppSettings {
     openai_api_key: string;
     claude_api_key: string;
     open_router_api_key: string;
+    brave_search_api_key: string; // Added for Brave Search
     // Provider/Model settings (example structure, adjust as needed)
     walkthrough_provider: ApiProvider;
     walkthrough_model: string; // Store the specific model string
@@ -48,6 +49,7 @@ export default function SettingsPage() {
   const [openaiKey, setOpenaiKey] = useState('');
   const [claudeKey, setClaudeKey] = useState('');
   const [openRouterKey, setOpenRouterKey] = useState('');
+  const [braveSearchKey, setBraveSearchKey] = useState(''); // Added for Brave Search
 
   // State for Models Tab
   const [walkthroughProvider, setWalkthroughProvider] = useState<ApiProvider>('openai');
@@ -78,6 +80,7 @@ export default function SettingsPage() {
           setOpenaiKey(loadedSettings.openai_api_key || '');
           setClaudeKey(loadedSettings.claude_api_key || '');
           setOpenRouterKey(loadedSettings.open_router_api_key || '');
+          setBraveSearchKey(loadedSettings.brave_search_api_key || ''); // Load Brave key
 
           // Load Models settings
           const wtProvider = loadedSettings.walkthrough_provider || 'openai';
@@ -97,6 +100,7 @@ export default function SettingsPage() {
           setOpenaiKey('');
           setClaudeKey('');
           setOpenRouterKey('');
+          setBraveSearchKey(''); // Reset Brave key on error
           // Reset models/theme state on error too
           setWalkthroughProvider('openai');
           setWalkthroughModel(PROVIDER_MODELS.openai[0]);
@@ -113,6 +117,7 @@ export default function SettingsPage() {
         setOpenaiKey('');
         setClaudeKey('');
         setOpenRouterKey('');
+        setBraveSearchKey(''); // Reset Brave key on error
         // Reset models/theme state on error too
         setWalkthroughProvider('openai');
         setWalkthroughModel(PROVIDER_MODELS.openai[0]);
@@ -145,6 +150,7 @@ export default function SettingsPage() {
       openai_api_key: openaiKey || '', // Ensure strings are not undefined
       claude_api_key: claudeKey || '',
       open_router_api_key: openRouterKey || '',
+      brave_search_api_key: braveSearchKey || '', // Save Brave key
       // Models
       walkthrough_provider: walkthroughProvider,
       walkthrough_model: walkthroughModel,
@@ -206,14 +212,16 @@ export default function SettingsPage() {
            <TabsContent value="api-keys">
              <Card>
                <CardHeader>
-                 <CardTitle>API Keys & Provider</CardTitle>
+                 <CardTitle>API Keys</CardTitle> {/* Updated Title */}
                  <CardDescription>
-                   Enter API keys for the services you want to use. Select the default provider for Walkthrough mode.
+                   Enter API keys for AI models and external tools. {/* Updated Description */}
                  </CardDescription>
                </CardHeader>
-               <CardContent className="space-y-6">
-                 {/* Key Inputs */}
+               <CardContent className="space-y-8"> {/* Increased spacing */}
+
+                 {/* AI Keys Subsection */}
                  <div className="space-y-4">
+                   <h3 className="text-lg font-medium border-b pb-2 mb-4">AI Providers</h3> {/* Subsection Title */}
                     <div className="grid grid-cols-4 items-center gap-4">
                       <Label htmlFor="openai" className="text-right col-span-1">
                         OpenAI
@@ -258,12 +266,27 @@ export default function SettingsPage() {
                     </div>
                  </div>
 
-                 {/* Divider */}
-                 <hr className="border-gray-200 dark:border-gray-700" />
+                 {/* Tools Keys Subsection */}
+                 <div className="space-y-4">
+                    <h3 className="text-lg font-medium border-b pb-2 mb-4">Tools</h3> {/* Subsection Title */}
+                    <div className="grid grid-cols-4 items-center gap-4">
+                      <Label htmlFor="brave-search" className="text-right col-span-1">
+                        Brave Search
+                      </Label>
+                      <Input
+                        id="brave-search"
+                        type="password"
+                        value={braveSearchKey}
+                        onChange={(e) => setBraveSearchKey(e.target.value)}
+                        placeholder="Enter Brave Search API Key"
+                        className="col-span-3"
+                        disabled={isLoading}
+                      />
+                    </div>
+                    {/* Add other tool keys here as needed */}
+                 </div>
 
-                 {/* Provider Selection removed from API Keys tab */}
-                 {/* TODO: Add Action Mode Provider Selection if needed (Likely in Models tab) */}
-
+                 {/* Removed redundant divider and comments */}
                </CardContent>
              </Card>
            </TabsContent>

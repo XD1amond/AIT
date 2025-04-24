@@ -2,8 +2,8 @@ use serde::{Serialize, Deserialize}; // Import Deserialize
 use tauri::{AppHandle, Manager};
 use tauri_plugin_store::{StoreBuilder, Error as StoreError}; // Import StoreError
 use std::io::ErrorKind; // Import ErrorKind for specific error checking
-
-// Remove unused PathBuf import
+use std::fs; // Import fs for directory creation
+use std::path::Path; // Import Path for parent directory access
 
 const SETTINGS_FILE: &str = "settings.store"; // Use .store extension convention
 
@@ -66,6 +66,8 @@ struct AppSettings {
     claude_api_key: String,
     #[serde(default)]
     open_router_api_key: String,
+    #[serde(default)] // Added for Brave Search
+    brave_search_api_key: String,
 
     // Models
     #[serde(default)] // Defaults to ApiProvider::default() -> OpenAI
@@ -117,8 +119,16 @@ fn get_settings(app: AppHandle) -> Result<AppSettings, String> {
     let store_path = app.path().resolve(SETTINGS_FILE, tauri::path::BaseDirectory::AppData)
         .map_err(|e| format!("Failed to resolve store path: {}", e))?;
 
+    // Ensure the parent directory exists
+    if let Some(parent_dir) = Path::new(&store_path).parent() {
+        fs::create_dir_all(parent_dir)
+            .map_err(|e| format!("Failed to create settings directory: {}", e))?;
+    } else {
+        return Err("Failed to get parent directory for settings file".to_string());
+    }
+
     // Build the store instance, passing the app handle to `new` and handling the Result from `build`
-    let store = StoreBuilder::new(app.app_handle(), store_path).build() // Use app_handle(), remove mut
+    let store = StoreBuilder::new(app.app_handle(), store_path.clone()).build() // Use app_handle(), remove mut, clone path
         .map_err(|e| format!("Failed to build store: {}", e))?; // Map error for ?
 
     // Reload the store from disk, handling NotFound error
@@ -152,8 +162,16 @@ fn save_settings(settings: AppSettings, app: AppHandle) -> Result<(), String> {
     let store_path = app.path().resolve(SETTINGS_FILE, tauri::path::BaseDirectory::AppData)
         .map_err(|e| format!("Failed to resolve store path: {}", e))?;
 
+    // Ensure the parent directory exists
+    if let Some(parent_dir) = Path::new(&store_path).parent() {
+        fs::create_dir_all(parent_dir)
+            .map_err(|e| format!("Failed to create settings directory: {}", e))?;
+    } else {
+        return Err("Failed to get parent directory for settings file".to_string());
+    }
+
     // Build the store instance, passing the app handle to `new` and handling the Result from `build`
-    let store = StoreBuilder::new(app.app_handle(), store_path).build() // Use app_handle(), remove mut
+    let store = StoreBuilder::new(app.app_handle(), store_path.clone()).build() // Use app_handle(), remove mut, clone path
         .map_err(|e| format!("Failed to build store: {}", e))?; // Map error for ?
 
     // Reload existing store data first, handling NotFound error
