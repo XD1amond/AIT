@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import Home from '../page'; // Import the main page component
 import { invoke } from '@tauri-apps/api/core'; // Import invoke for mocking if needed by child components

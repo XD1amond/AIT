@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+// import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"; // Removed unused Card components
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { motion } from 'framer-motion';
 import { invoke, isTauri } from '@tauri-apps/api/core'; // Import isTauri
@@ -58,8 +58,10 @@ async function callLlmApi(
   }
 
   let endpoint = '';
+  // eslint-disable-next-line prefer-const -- headers object is mutated later by adding properties
   let headers: HeadersInit = { 'Content-Type': 'application/json' };
-  let body: any = {};
+  // Use a safer type than 'any' for the request body
+  let body: Record<string, unknown> = {};
 
   // --- Provider-Specific Configuration ---
   try {

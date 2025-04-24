@@ -1,9 +1,11 @@
 use serde::{Serialize, Deserialize}; // Import Deserialize
-use tauri::{AppHandle, State, Manager}; // Add Manager for app_handle
-use tauri_plugin_store::{StoreCollection, StoreBuilder}; // Use StoreBuilder
-use std::path::PathBuf; // For store path
+use tauri::{AppHandle, Manager};
+use tauri_plugin_store::{StoreBuilder, Error as StoreError}; // Import StoreError
+use std::io::ErrorKind; // Import ErrorKind for specific error checking
 
-const SETTINGS_FILE: &str = "settings.dat";
+// Remove unused PathBuf import
+
+const SETTINGS_FILE: &str = "settings.store"; // Use .store extension convention
 
 // Define structs for the data we want to return
 #[derive(Serialize, Clone)]
@@ -19,22 +21,73 @@ struct MemoryInfo {
     free_mem: u64,  // in KB
 }
 
-// Define struct for settings stored
-#[derive(Serialize, Deserialize, Debug, Default, Clone)] // Add Deserialize, Debug, Default
+// Define types matching frontend
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+enum ApiProvider {
+    #[serde(rename = "openai")]
+    OpenAI,
+    #[serde(rename = "claude")]
+    Claude,
+    #[serde(rename = "openrouter")]
+    OpenRouter,
+}
+
+// Default implementation for ApiProvider
+impl Default for ApiProvider {
+    fn default() -> Self {
+        ApiProvider::OpenAI
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+enum Theme {
+    #[serde(rename = "light")]
+    Light,
+    #[serde(rename = "dark")]
+    Dark,
+    #[serde(rename = "system")]
+    System,
+}
+
+// Default implementation for Theme
+impl Default for Theme {
+    fn default() -> Self {
+        Theme::System
+    }
+}
+
+
+// Define struct for settings stored - matching frontend structure
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 struct AppSettings {
-    #[serde(default)] // Use default value ("") if missing
+    #[serde(default)]
     openai_api_key: String,
     #[serde(default)]
     claude_api_key: String,
     #[serde(default)]
     open_router_api_key: String,
-    #[serde(default = "default_provider")] // Use default function
-    walkthrough_provider: String,
+
+    // Models
+    #[serde(default)] // Defaults to ApiProvider::default() -> OpenAI
+    walkthrough_provider: ApiProvider,
+    #[serde(default = "default_walkthrough_model")] // Use default function
+    walkthrough_model: String,
+    #[serde(default)] // Defaults to ApiProvider::default() -> OpenAI
+    action_provider: ApiProvider,
+    #[serde(default = "default_action_model")] // Use default function
+    action_model: String,
+
+    // Appearance
+    #[serde(default)] // Defaults to Theme::default() -> System
+    theme: Theme,
 }
 
-// Function to provide default provider value
-fn default_provider() -> String {
-    "openai".to_string()
+// Default model functions (adjust models as needed)
+fn default_walkthrough_model() -> String {
+    "gpt-4o".to_string() // Example default
+}
+fn default_action_model() -> String {
+    "gpt-4o".to_string() // Example default
 }
 
 
@@ -60,30 +113,34 @@ fn get_memory_info() -> Result<MemoryInfo, String> {
 // Tauri command to get settings from store
 #[tauri::command]
 fn get_settings(app: AppHandle) -> Result<AppSettings, String> {
-    let stores = app.state::<StoreCollection<tauri::Wry>>();
-    // Use app_data_dir for a reliable path
-    let store_path = app.path().app_data_dir()
-        .ok_or_else(|| "Failed to get app data directory".to_string())?
-        .join(SETTINGS_FILE);
+    // Resolve the path relative to the app's data directory
+    let store_path = app.path().resolve(SETTINGS_FILE, tauri::path::BaseDirectory::AppData)
+        .map_err(|e| format!("Failed to resolve store path: {}", e))?;
 
-    // Lock the store collection to access the specific store
-    match stores.get(store_path) {
-        Some(store) => {
-            // Attempt to load the settings struct
-            match store.get("app_settings") {
-                Ok(Some(settings_value)) => {
-                    // Deserialize the value into AppSettings
-                    serde_json::from_value(settings_value.clone())
-                        .map_err(|e| format!("Failed to deserialize settings: {}", e))
-                },
-                Ok(None) => {
-                    // No settings found, return default
-                    Ok(AppSettings::default())
-                },
-                Err(e) => Err(format!("Failed to get settings from store: {}", e)),
-            }
+    // Build the store instance, passing the app handle to `new` and handling the Result from `build`
+    let store = StoreBuilder::new(app.app_handle(), store_path).build() // Use app_handle(), remove mut
+        .map_err(|e| format!("Failed to build store: {}", e))?; // Map error for ?
+
+    // Reload the store from disk, handling NotFound error
+    match store.reload() {
+        Ok(_) => {} // Reload successful, continue
+        Err(StoreError::Io(e)) if e.kind() == ErrorKind::NotFound => {
+            // File not found is okay on first load, defaults will be used
+        }
+        Err(e) => return Err(format!("Failed to reload store: {}", e)), // Propagate other errors
+    }
+
+    // Get the settings value
+    match store.get("app_settings") {
+        Some(settings_value) => {
+            // Deserialize the value into AppSettings
+            serde_json::from_value(settings_value.clone())
+                .map_err(|e| format!("Failed to deserialize settings: {}", e))
         },
-        None => Err("Store not found.".to_string()),
+        None => {
+            // No settings found, return default
+            Ok(AppSettings::default())
+        }
     }
 }
 
@@ -91,42 +148,39 @@ fn get_settings(app: AppHandle) -> Result<AppSettings, String> {
 // Tauri command to save settings to store
 #[tauri::command]
 fn save_settings(settings: AppSettings, app: AppHandle) -> Result<(), String> {
-    let stores = app.state::<StoreCollection<tauri::Wry>>();
-    // Use app_data_dir for a reliable path
-    let store_path = app.path().app_data_dir()
-        .ok_or_else(|| "Failed to get app data directory".to_string())?
-        .join(SETTINGS_FILE);
+    // Resolve the path relative to the app's data directory
+    let store_path = app.path().resolve(SETTINGS_FILE, tauri::path::BaseDirectory::AppData)
+        .map_err(|e| format!("Failed to resolve store path: {}", e))?;
 
-    // Lock the store collection to access the specific store
-    match stores.get(store_path) {
-        Some(store) => {
-            // Serialize the settings struct to a JSON value
-            let settings_value = serde_json::to_value(&settings)
-                .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+    // Build the store instance, passing the app handle to `new` and handling the Result from `build`
+    let store = StoreBuilder::new(app.app_handle(), store_path).build() // Use app_handle(), remove mut
+        .map_err(|e| format!("Failed to build store: {}", e))?; // Map error for ?
 
-            // Save the value to the store
-            store.insert("app_settings".to_string(), settings_value)
-                .map_err(|e| format!("Failed to insert settings into store: {}", e))?;
-
-            // Persist changes to disk
-            store.save().map_err(|e| format!("Failed to save store: {}", e))
-        },
-        None => Err("Store not found.".to_string()),
+    // Reload existing store data first, handling NotFound error
+    match store.reload() {
+        Ok(_) => {} // Reload successful, continue
+        Err(StoreError::Io(e)) if e.kind() == ErrorKind::NotFound => {
+            // File not found is okay before saving, .save() will create it
+        }
+        Err(e) => return Err(format!("Failed to reload store before saving: {}", e)), // Propagate other errors
     }
+
+    // Serialize the settings struct to a JSON value
+    let settings_value = serde_json::to_value(&settings)
+        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+
+    // Set (insert or update) the value in the store
+    store.set("app_settings".to_string(), settings_value); // Use set(), returns () so no ? needed
+
+    // Persist changes to disk
+    store.save().map_err(|e| format!("Failed to save store: {}", e))
 }
 
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
-    .plugin(
-        // Note: StoreBuilder initialization path might also need adjustment if relative paths cause issues here.
-        // However, the plugin might handle relative paths correctly during initialization by placing them in the app data dir automatically.
-        // Let's keep this as is for now and focus on access paths first.
-        tauri_plugin_store::Builder::default()
-            .store(StoreBuilder::new(SETTINGS_FILE.parse().unwrap()).default("app_settings".to_string(), serde_json::to_value(AppSettings::default()).unwrap()))
-            .build()
-    )
+    .plugin(tauri_plugin_store::Builder::new().build()) // Simplified plugin init
     .invoke_handler(tauri::generate_handler![
         get_os_info,
         get_memory_info,

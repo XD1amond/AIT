@@ -1,5 +1,5 @@
 import React from 'react';
-import type { Metadata } from "next";
+// import type { Metadata } from "next"; // Removed unused import
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { cn } from "@/lib/utils";
