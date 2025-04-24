@@ -1,52 +1,137 @@
 'use client';
 
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react'; // Import useState, useEffect, useRef
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ScrollArea } from "@/components/ui/scroll-area"; // Import ScrollArea
 import { motion } from 'framer-motion';
+import { Send } from 'lucide-react';
+
+// Define a type for messages in Action Mode
+interface ActionMessage {
+  id: number; // For key prop
+  type: 'task' | 'status' | 'result' | 'error';
+  content: string;
+}
 
 export function ActionMode() {
-  const [task, setTask] = React.useState('');
-  const [result, setResult] = React.useState(''); // To display AI response/status
+  const [task, setTask] = useState('');
+  // Store a list of messages instead of a single result
+  const [messages, setMessages] = useState<ActionMessage[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const nextId = useRef(0); // To generate unique keys for messages
+  const viewportRef = useRef<HTMLDivElement>(null); // For scrolling
 
-  const handleSubmit = () => {
-    console.log("Action Mode Task Submitted:", task);
-    setResult(`Attempting task: "${task}"... (Simulation)`);
+  // Scroll to bottom when messages change
+  useEffect(() => {
+    const element = viewportRef.current;
+    if (element) {
+      // Use requestAnimationFrame for smoother scrolling after render
+      requestAnimationFrame(() => {
+        element.scrollTop = element.scrollHeight;
+      });
+    }
+  }, [messages]);
+
+
+  const handleSubmit = async () => {
+    if (!task.trim() || isLoading) return;
+
+    const currentTask = task; // Capture task before clearing
+    setTask(''); // Clear input immediately
+
+    const taskId = nextId.current++;
+    const statusId = nextId.current++;
+    const resultId = nextId.current++;
+
+    // Add task message (user input style)
+    setMessages(prev => [...prev, { id: taskId, type: 'task', content: currentTask }]);
+    setIsLoading(true);
+
+    // Add status message (AI thinking style)
+    setMessages(prev => [...prev, { id: statusId, type: 'status', content: `Attempting task: "${currentTask}"...` }]);
+
     // TODO: Integrate with Agent S2 API
+    try {
+        // Simulate API call delay
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        // Add result message on success (AI response style)
+        setMessages(prev => [...prev, { id: resultId, type: 'result', content: `Simulated completion for: "${currentTask}"` }]);
+    } catch (error) {
+        // Add error message on failure (AI error style)
+        setMessages(prev => [...prev, { id: resultId, type: 'error', content: `Failed to execute task: "${currentTask}". Error: ${error instanceof Error ? error.message : String(error)}` }]);
+    } finally {
+        setIsLoading(false);
+    }
   };
 
   return (
+    // Use flex column, h-full to fill space
     <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.5 }}
-      className="w-full max-w-2xl"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.3 }}
+      // Consistent padding and structure with WalkthroughMode
+      className="flex flex-col h-full w-full max-w-3xl mx-auto p-4" // Use max-w-3xl like Walkthrough
     >
-      <Card>
-        <CardHeader>
-          <CardTitle>Action Mode</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            Enter the computer problem or task you want the AI to perform.
-          </p>
-          <div className="flex space-x-2">
-            <Input
-              placeholder="e.g., change my wallpaper, clear browser cache"
-              value={task}
-              onChange={(e) => setTask(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleSubmit()}
-            />
-            <Button onClick={handleSubmit}>Go</Button>
-          </div>
-          {result && (
-            <div className="mt-4 p-4 bg-secondary/50 rounded-md text-sm">
-              <p>{result}</p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      {/* Description (optional, could be removed for cleaner look) */}
+      <p className="text-sm text-muted-foreground mb-4 text-center shrink-0">
+        Enter the computer problem or task you want the AI to perform.
+      </p>
+
+      {/* Message Area using ScrollArea */}
+      <ScrollArea className="flex-grow mb-4 pr-4 -mr-4">
+         <div ref={viewportRef} className="space-y-2"> {/* Reduced space-y */}
+            {messages.map((msg) => (
+              <motion.div
+                key={msg.id}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.3 }}
+                // Styling similar to WalkthroughMode messages
+                className={`max-w-[80%] p-3 rounded-lg text-sm ${
+                  msg.type === 'task'
+                    ? 'ml-auto bg-blue-600 text-white' // User task aligned right
+                    : msg.type === 'error'
+                    ? 'mr-auto bg-red-100 dark:bg-red-900/50 text-red-900 dark:text-red-200' // Error aligned left
+                    : 'mr-auto bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100' // Status/Result aligned left
+                }`}
+              >
+                {/* Render newlines correctly */}
+                {msg.content.split('\n').map((line, i) => (
+                  <p key={i} style={{ minHeight: '1em' }}>{line || '\u00A0'}</p>
+                ))}
+              </motion.div>
+            ))}
+             {isLoading && ( // Show thinking indicator consistent with Walkthrough
+                 <motion.div
+                   initial={{ opacity: 0, y: 10 }}
+                   animate={{ opacity: 1, y: 0 }}
+                   transition={{ duration: 0.3 }}
+                   className="max-w-[80%] p-3 rounded-lg bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 animate-pulse text-sm mr-auto"
+                 >
+                    Processing...
+                 </motion.div>
+             )}
+         </div>
+      </ScrollArea>
+
+
+      {/* Input Bar at the bottom - Consistent with WalkthroughMode */}
+      <div className="flex space-x-2 items-center border-t pt-4 shrink-0"> {/* Added shrink-0 */}
+        <Input
+          placeholder="e.g., change my wallpaper, clear browser cache"
+          value={task}
+          onChange={(e) => setTask(e.target.value)}
+          onKeyPress={(e) => e.key === 'Enter' && handleSubmit()}
+          disabled={isLoading}
+          className="flex-1"
+          aria-label="Task input"
+        />
+        <Button onClick={handleSubmit} disabled={isLoading || !task.trim()} size="icon" aria-label="Submit task">
+          <Send className="h-4 w-4" />
+        </Button>
+      </div>
     </motion.div>
   );
 }

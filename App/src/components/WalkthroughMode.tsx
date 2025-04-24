@@ -6,9 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { motion } from 'framer-motion';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, isTauri } from '@tauri-apps/api/core'; // Import isTauri
 import { Send } from 'lucide-react';
-import { ApiProvider } from './ApiKeySettings'; // Still needed for type
+// Removed import { ApiProvider } from './ApiKeySettings';
+
+// Define ApiProvider type locally
+export type ApiProvider = 'openai' | 'claude' | 'openrouter';
 
 // Define types for system info (matching Rust structs)
 interface OsInfo {
@@ -162,48 +165,69 @@ export function WalkthroughMode() { // Removed props
       let sysInfoError: string | undefined;
       let initialMsgContent = 'Hello! How can I help you today?';
 
-      // Fetch System Info
-      try {
-        const os = await invoke<OsInfo>('get_os_info');
-        const memory = await invoke<MemoryInfo>('get_memory_info');
-        setSystemInfo({ os, memory });
-        initialMsgContent += ' I have some basic info about your system.';
-      } catch (error) {
-        console.error("Failed to fetch system info:", error);
-        sysInfoError = 'Could not load system information.';
-        setSystemInfo({ error: sysInfoError });
-        initialMsgContent += ' (Note: I could not retrieve system info).';
-      } finally {
-        setIsFetchingSysInfo(false);
-      }
+      // Use isTauri() for a more robust check
+      if (await isTauri()) {
+        // Fetch System Info
+        try {
+          const os = await invoke<OsInfo>('get_os_info');
+          const memory = await invoke<MemoryInfo>('get_memory_info');
+          setSystemInfo({ os, memory });
+          initialMsgContent += ' I have some basic info about your system.';
+        } catch (error) {
+          console.error("Failed to fetch system info via invoke:", error);
+          sysInfoError = 'Could not load system information via Tauri.';
+          setSystemInfo({ error: sysInfoError });
+          initialMsgContent += ' (Note: I could not retrieve system info).';
+        } finally {
+          setIsFetchingSysInfo(false);
+        }
 
-      // Fetch Settings
-      try {
-        console.log("Invoking get_settings in WalkthroughMode...");
-        const loadedSettings = await invoke<AppSettings>('get_settings');
-        console.log("Settings received in WalkthroughMode:", loadedSettings);
-        setAppSettings(loadedSettings);
-        if (!loadedSettings.openai_api_key && !loadedSettings.claude_api_key && !loadedSettings.open_router_api_key) {
+        // Fetch Settings
+        try {
+          console.log("Invoking get_settings in WalkthroughMode...");
+          const loadedSettings = await invoke<AppSettings>('get_settings');
+          console.log("Settings received in WalkthroughMode:", loadedSettings);
+          setAppSettings(loadedSettings);
+          if (!loadedSettings.openai_api_key && !loadedSettings.claude_api_key && !loadedSettings.open_router_api_key) {
             initialMsgContent += ' Please set an API key in Settings to enable AI responses.';
             setSettingsError('No API key found. Please configure in Settings.');
         } else if (!loadedSettings[`${loadedSettings.walkthrough_provider}_api_key` as keyof AppSettings]) {
              initialMsgContent += ` The API key for the selected provider (${loadedSettings.walkthrough_provider}) is missing. Please check Settings.`;
              setSettingsError(`API key for ${loadedSettings.walkthrough_provider} is missing.`);
         }
-      } catch (err) {
-        console.error("Failed to load settings via invoke:", err);
-        const errorMsg = `Failed to load settings: ${err instanceof Error ? err.message : String(err)}`;
-        setSettingsError(errorMsg);
-        initialMsgContent += ' Could not load API settings.';
-      } finally {
+        } catch (err) {
+          console.error("Failed to load settings via invoke:", err);
+          const errorMsg = `Failed to load settings via Tauri: ${err instanceof Error ? err.message : String(err)}`;
+          setSettingsError(errorMsg);
+          initialMsgContent += ' Could not load API settings via Tauri.';
+        } finally {
+          setIsFetchingSettings(false);
+        }
+      } else { // This block might be less likely to be hit now, but keep for safety
+        // Handle case where Tauri is not available
+        console.warn("Tauri API not available (isTauri check failed). Skipping system info and settings fetch.");
+        sysInfoError = 'Tauri context not found. System info unavailable.';
+        setSystemInfo({ error: sysInfoError });
+        setSettingsError('Tauri context not found. Cannot load settings.');
+        initialMsgContent += ' (Note: Tauri features are unavailable).';
+        setIsFetchingSysInfo(false);
         setIsFetchingSettings(false);
       }
+
 
       // Set initial message after all fetching attempts
       setMessages([{ sender: 'ai', content: initialMsgContent }]);
     };
 
-    fetchInitialData();
+    // Introduce a small delay before fetching initial data
+    const timer = setTimeout(() => {
+      (async () => {
+        await fetchInitialData();
+      })();
+    }, 100); // 100ms delay
+
+    // Cleanup function to clear the timer if the component unmounts
+    return () => clearTimeout(timer);
   }, []); // Empty dependency array ensures this runs only once on mount
 
   // Scroll to bottom when messages change
@@ -283,74 +307,73 @@ export function WalkthroughMode() { // Removed props
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5 }}
-      className="w-full max-w-3xl h-[80vh] flex flex-col"
+      // Use flex-col, h-full to fill space, remove max-width, add padding
+      className="w-full h-full flex flex-col p-4"
     >
-      <Card className="flex-grow flex flex-col overflow-hidden">
-        <CardHeader>
-          <CardTitle>Walkthrough Mode</CardTitle>
-          <CardDescription>
-            Ask your tech support questions below.
-            {(isFetchingSysInfo || isFetchingSettings) && <span className="text-xs text-muted-foreground ml-2">(Loading...)</span>}
-            {systemInfo.error && <span className="text-xs text-red-500 ml-2">({systemInfo.error})</span>}
-            {settingsError && <span className="text-xs text-red-500 ml-2">({settingsError})</span>}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex-grow flex flex-col space-y-4 overflow-hidden">
-          <ScrollArea className="flex-grow pr-4 -mr-4">
-            <div ref={viewportRef} className="h-full space-y-4 pb-4">
-              {messages.map((msg, index) => (
-                <div
-                  key={index}
-                  className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
-                >
-                  <motion.div
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.3 }}
-                    className={`max-w-[75%] p-3 rounded-lg shadow-sm ${
-                      msg.sender === 'user'
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-secondary text-secondary-foreground'
-                    }`}
-                  >
-                    {msg.content.split('\n').map((line, i) => <p key={i}>{line || '\u00A0'}</p>)}
-                  </motion.div>
-                </div>
-              ))}
-               {isLoading && (
-                 <div className="flex justify-start">
-                    <motion.div
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.3 }}
-                      className="max-w-[75%] p-3 rounded-lg bg-secondary text-secondary-foreground animate-pulse shadow-sm"
-                    >
-                        Thinking...
-                    </motion.div>
-                 </div>
-               )}
-            </div>
-          </ScrollArea>
-          <div className="flex space-x-2 pt-4 border-t">
-            <Input
-              placeholder="Type your question..."
-              value={userInput}
-              onChange={(e) => setUserInput(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
-              disabled={isLoading || isFetchingSysInfo || isFetchingSettings || !!settingsError} // Disable if loading or error
-              aria-label="Chat input"
-            />
-            <Button
-                onClick={handleSendMessage}
-                disabled={isLoading || isFetchingSysInfo || isFetchingSettings || !!settingsError || !userInput.trim()} // Disable if loading, error, or no input
-                size="icon"
-                aria-label="Send message"
+      {/* Message Area */}
+      {/* Use flex-grow to take up space above input, add padding for scrollbar */}
+      <ScrollArea className="flex-grow mb-4 pr-4 -mr-4">
+        {/* Removed extra div, use viewportRef directly on ScrollArea if possible, or keep simple div */}
+        <div ref={viewportRef} className="space-y-4">
+          {messages.map((msg, index) => (
+            <div
+              key={index}
+              className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
             >
-              <Send className="h-4 w-4" />
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.3 }}
+                // Slightly increased padding, removed shadow for cleaner look
+                className={`max-w-[80%] p-3 rounded-lg ${
+                  msg.sender === 'user'
+                    ? 'bg-blue-600 text-white' // Keep user message style distinct
+                    : 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100' // Use neutral background for AI
+                }`}
+              >
+                {/* Render newlines correctly */}
+                {msg.content.split('\n').map((line, i) => (
+                  <p key={i} style={{ minHeight: '1em' }}>{line || '\u00A0'}</p> // Ensure empty lines take space
+                ))}
+              </motion.div>
+            </div>
+          ))}
+           {isLoading && (
+             <div className="flex justify-start">
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3 }}
+                  // Consistent styling with AI messages
+                  className="max-w-[80%] p-3 rounded-lg bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 animate-pulse"
+                >
+                    Thinking...
+                </motion.div>
+             </div>
+           )}
+        </div>
+      </ScrollArea>
+
+      {/* Input Bar - Consistent with ActionMode */}
+      <div className="flex space-x-2 items-center border-t pt-4">
+        <Input
+          placeholder="Type your question..."
+          value={userInput}
+          onChange={(e) => setUserInput(e.target.value)}
+          onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+          disabled={isLoading} // Keep simplified disabled logic for now
+          className="flex-1" // Input takes remaining width
+          aria-label="Chat input"
+        />
+        <Button
+            onClick={handleSendMessage}
+            disabled={isLoading || !userInput.trim()} // Keep simplified disabled logic
+            size="icon"
+            aria-label="Send message"
+        >
+          <Send className="h-4 w-4" />
+        </Button>
+      </div>
     </motion.div>
   );
 }

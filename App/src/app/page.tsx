@@ -1,105 +1,110 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Button } from "@/components/ui/button";
 import { motion, AnimatePresence } from "framer-motion";
-import { ActionMode } from '@/components/ActionMode'; // Import Action Mode component
-import { WalkthroughMode } from '@/components/WalkthroughMode'; // Import Walkthrough Mode component
-import { ArrowLeft } from 'lucide-react'; // Icon for back button
-// Removed ApiProvider import as it's not needed here anymore
+import { ActionMode } from '@/components/ActionMode';
+import { WalkthroughMode } from '@/components/WalkthroughMode';
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"; // Added import
+import { Label } from "@/components/ui/label";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Settings } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import Link from 'next/link'; // Import Link for navigation
 
-type Mode = 'select' | 'action' | 'walkthrough';
+// Define the modes available in the chat interface
+type Mode = 'action' | 'walkthrough';
+const modes: { id: Mode; label: string }[] = [
+    { id: 'action', label: 'Action' },
+    { id: 'walkthrough', label: 'Walkthrough' },
+];
 
-// Removed HomeProps interface
-
-export default function Home() { // Removed props
-  const [currentMode, setCurrentMode] = useState<Mode>('select');
-
-  const handleModeSelect = (mode: Mode) => {
-    setCurrentMode(mode);
-  };
-
-  const renderContent = () => {
-    switch (currentMode) {
-      case 'action':
-        return <ActionMode />;
-      case 'walkthrough':
-        // Removed props passed to WalkthroughMode
-        return <WalkthroughMode />;
-      case 'select':
-      default:
-        return (
-          <>
-            <motion.h1
-              className="text-4xl font-bold mb-12 text-gray-800 dark:text-gray-200"
-              initial={{ opacity: 0, y: -20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.5 }}
-            >
-              Choose Your Mode
-            </motion.h1>
-            <motion.div
-              className="flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-6"
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ duration: 0.5, delay: 0.2 }}
-            >
-              <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
-                <Button
-                  onClick={() => handleModeSelect('action')}
-                  className="w-full sm:w-auto px-8 py-6 text-lg font-semibold bg-blue-600 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 text-white rounded-lg shadow-md transition-all duration-300"
-                >
-                  Action Mode
-                </Button>
-              </motion.div>
-              <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
-                <Button
-                  onClick={() => handleModeSelect('walkthrough')}
-                  variant="outline"
-                  className="w-full sm:w-auto px-8 py-6 text-lg font-semibold border-blue-600 text-blue-600 hover:bg-blue-100 dark:border-blue-400 dark:text-blue-400 dark:hover:bg-blue-900/50 rounded-lg shadow-md transition-all duration-300"
-                >
-                  Walkthrough Mode
-                </Button>
-              </motion.div>
-            </motion.div>
-          </>
-        );
-    }
-  };
+export default function Home() {
+  // Default to Walkthrough mode
+  const [currentMode, setCurrentMode] = useState<Mode>('walkthrough');
 
   return (
-    <div className="relative flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-gray-100 to-gray-200 dark:from-gray-900 dark:to-gray-800 p-8">
-      {currentMode !== 'select' && (
-         <motion.div
-           initial={{ opacity: 0, x: -20 }}
-           animate={{ opacity: 1, x: 0 }}
-           exit={{ opacity: 0, x: -20 }}
-           transition={{ duration: 0.3 }}
-           className="absolute top-6 left-6"
-         >
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => handleModeSelect('select')}
-            aria-label="Go back to mode selection"
-          >
-            <ArrowLeft className="h-6 w-6" />
-          </Button>
-         </motion.div>
-      )}
-      <AnimatePresence mode="wait">
-        <motion.div
-          key={currentMode} // Key change triggers animation
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -20 }}
-          transition={{ duration: 0.3 }}
-          className="flex flex-col items-center w-full" // Ensure content takes width
-        >
-          {renderContent()}
-        </motion.div>
-      </AnimatePresence>
-      {/* ApiKeySettings is likely rendered in layout.tsx or needs to be added here if not */}
+    <div className="flex h-screen w-screen overflow-hidden bg-gray-100 dark:bg-gray-900">
+
+      {/* Sidebar */}
+      <aside className="w-64 flex flex-col bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">
+        <div className="p-4 border-b border-gray-200 dark:border-gray-700">
+            <h1 className="text-xl font-semibold">AIT</h1> {/* App Title */}
+        </div>
+        <ScrollArea className="flex-1 p-4">
+          <h2 className="text-sm font-semibold mb-2 text-gray-500 dark:text-gray-400 uppercase">Chats</h2>
+          {/* Placeholder for chat history items */}
+          <div className="text-sm text-gray-400 dark:text-gray-500">
+            (Chat history will appear here)
+          </div>
+        </ScrollArea>
+         {/* Settings Link */}
+         <div className="p-4 border-t border-gray-200 dark:border-gray-700">
+            <Link href="/settings">
+              <Button variant="ghost" className="w-full justify-start text-sm">
+                  <Settings className="mr-2 h-4 w-4" />
+                  Settings
+              </Button>
+            </Link>
+         </div>
+      </aside>
+
+      {/* Main Content Area */}
+      <main className="flex-1 flex flex-col overflow-hidden relative">
+
+        {/* Floating Mode Switcher */}
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10">
+             <RadioGroup
+                value={currentMode}
+                onValueChange={(value: string) => setCurrentMode(value as Mode)}
+                // Use flex, padding, background, rounded, shadow
+                className="relative flex space-x-1 bg-gray-200 dark:bg-gray-700 p-1 rounded-full shadow-md"
+             >
+                {/* Map over modes to create options */}
+                {modes.map((mode) => (
+                    <div key={mode.id} className="relative z-10"> {/* Container for label + potential highlight */}
+                        <RadioGroupItem value={mode.id} id={`${mode.id}-mode`} className="sr-only" />
+                        <Label
+                            htmlFor={`${mode.id}-mode`}
+                            // Base styling for label: padding, rounded, cursor, transition
+                            className={`relative block px-5 py-1.5 rounded-full cursor-pointer transition-colors text-sm font-medium ${
+                                // Text color based on selection
+                                currentMode === mode.id ? 'text-gray-900 dark:text-gray-100' : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
+                            }`}
+                        >
+                            {/* Render the highlight *inside* the selected label's container */}
+                            {currentMode === mode.id && (
+                                <motion.div
+                                    layoutId="modeHighlight" // Shared layout ID
+                                    // Style the highlight: absolute, covers container, background, rounded
+                                    className="absolute inset-0 h-full bg-white dark:bg-black rounded-full -z-10" // Use -z-10 to place behind text
+                                    transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                                />
+                            )}
+                            {/* Label Text */}
+                            {mode.label}
+                        </Label>
+                    </div>
+                ))}
+             </RadioGroup>
+        </div>
+
+
+        {/* Chat Interface Area */}
+        <div className="flex-1 overflow-hidden flex p-4 md:p-6 lg:p-8">
+           <AnimatePresence mode="wait">
+             <motion.div
+               key={currentMode}
+               initial={{ opacity: 0 }}
+               animate={{ opacity: 1 }}
+               exit={{ opacity: 0 }}
+               transition={{ duration: 0.15 }}
+               className="w-full h-full flex"
+             >
+                {currentMode === 'action' ? <ActionMode /> : <WalkthroughMode />}
+             </motion.div>
+           </AnimatePresence>
+        </div>
+      </main>
     </div>
   );
 }

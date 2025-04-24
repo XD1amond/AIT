@@ -61,10 +61,13 @@ fn get_memory_info() -> Result<MemoryInfo, String> {
 #[tauri::command]
 fn get_settings(app: AppHandle) -> Result<AppSettings, String> {
     let stores = app.state::<StoreCollection<tauri::Wry>>();
-    let path = PathBuf::from(SETTINGS_FILE);
+    // Use app_data_dir for a reliable path
+    let store_path = app.path().app_data_dir()
+        .ok_or_else(|| "Failed to get app data directory".to_string())?
+        .join(SETTINGS_FILE);
 
     // Lock the store collection to access the specific store
-    match stores.get(path) {
+    match stores.get(store_path) {
         Some(store) => {
             // Attempt to load the settings struct
             match store.get("app_settings") {
@@ -89,10 +92,13 @@ fn get_settings(app: AppHandle) -> Result<AppSettings, String> {
 #[tauri::command]
 fn save_settings(settings: AppSettings, app: AppHandle) -> Result<(), String> {
     let stores = app.state::<StoreCollection<tauri::Wry>>();
-    let path = PathBuf::from(SETTINGS_FILE);
+    // Use app_data_dir for a reliable path
+    let store_path = app.path().app_data_dir()
+        .ok_or_else(|| "Failed to get app data directory".to_string())?
+        .join(SETTINGS_FILE);
 
     // Lock the store collection to access the specific store
-    match stores.get(path) {
+    match stores.get(store_path) {
         Some(store) => {
             // Serialize the settings struct to a JSON value
             let settings_value = serde_json::to_value(&settings)
@@ -114,8 +120,11 @@ fn save_settings(settings: AppSettings, app: AppHandle) -> Result<(), String> {
 pub fn run() {
   tauri::Builder::default()
     .plugin(
+        // Note: StoreBuilder initialization path might also need adjustment if relative paths cause issues here.
+        // However, the plugin might handle relative paths correctly during initialization by placing them in the app data dir automatically.
+        // Let's keep this as is for now and focus on access paths first.
         tauri_plugin_store::Builder::default()
-            .store(StoreBuilder::new(SETTINGS_FILE.parse().unwrap()).default("app_settings".to_string(), serde_json::to_value(AppSettings::default()).unwrap())) // Initialize with default if needed
+            .store(StoreBuilder::new(SETTINGS_FILE.parse().unwrap()).default("app_settings".to_string(), serde_json::to_value(AppSettings::default()).unwrap()))
             .build()
     )
     .invoke_handler(tauri::generate_handler![
