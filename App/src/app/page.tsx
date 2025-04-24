@@ -6,17 +6,13 @@ import { motion, AnimatePresence } from "framer-motion";
 import { ActionMode } from '@/components/ActionMode'; // Import Action Mode component
 import { WalkthroughMode } from '@/components/WalkthroughMode'; // Import Walkthrough Mode component
 import { ArrowLeft } from 'lucide-react'; // Icon for back button
-import { ApiProvider } from '@/components/ApiKeySettings'; // Import ApiProvider type
+// Removed ApiProvider import as it's not needed here anymore
 
 type Mode = 'select' | 'action' | 'walkthrough';
 
-// Define props type
-interface HomeProps {
-  apiKeys: { openai: string; claude: string; openrouter: string };
-  walkthroughProvider: ApiProvider;
-}
+// Removed HomeProps interface
 
-export default function Home({ apiKeys, walkthroughProvider }: HomeProps) { // Accept props
+export default function Home() { // Removed props
   const [currentMode, setCurrentMode] = useState<Mode>('select');
 
   const handleModeSelect = (mode: Mode) => {
@@ -26,10 +22,10 @@ export default function Home({ apiKeys, walkthroughProvider }: HomeProps) { // A
   const renderContent = () => {
     switch (currentMode) {
       case 'action':
-        return <ActionMode />; // Action mode doesn't need keys/provider for now
+        return <ActionMode />;
       case 'walkthrough':
-        // Pass props down to WalkthroughMode
-        return <WalkthroughMode apiKeys={apiKeys} provider={walkthroughProvider} />;
+        // Removed props passed to WalkthroughMode
+        return <WalkthroughMode />;
       case 'select':
       default:
         return (
@@ -103,6 +99,7 @@ export default function Home({ apiKeys, walkthroughProvider }: HomeProps) { // A
           {renderContent()}
         </motion.div>
       </AnimatePresence>
+      {/* ApiKeySettings is likely rendered in layout.tsx or needs to be added here if not */}
     </div>
   );
 }

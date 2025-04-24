@@ -4,11 +4,11 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { ScrollArea } from "@/components/ui/scroll-area"; // Import ScrollArea
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { motion } from 'framer-motion';
-import { invoke } from '@tauri-apps/api/core'; // Import invoke
-import { Send } from 'lucide-react'; // Send icon
-import { ApiProvider } from './ApiKeySettings'; // Import ApiProvider type
+import { invoke } from '@tauri-apps/api/core';
+import { Send } from 'lucide-react';
+import { ApiProvider } from './ApiKeySettings'; // Still needed for type
 
 // Define types for system info (matching Rust structs)
 interface OsInfo {
@@ -28,12 +28,20 @@ interface SystemInfo {
   error?: string;
 }
 
+// Define the shape of the settings object matching Rust struct
+interface AppSettings {
+    openai_api_key: string;
+    claude_api_key: string;
+    open_router_api_key: string;
+    walkthrough_provider: ApiProvider;
+}
+
 interface ChatMessage {
   sender: 'user' | 'ai';
   content: string;
 }
 
-// --- Actual LLM API Call Implementation ---
+// --- Actual LLM API Call Implementation (remains the same) ---
 async function callLlmApi(
     messages: ChatMessage[],
     systemPrompt: string,
@@ -43,7 +51,7 @@ async function callLlmApi(
   console.log(`Calling LLM API for provider: ${provider}...`);
 
   if (!apiKey) {
-    return "Error: API key for the selected provider is not set in Settings.";
+    return "Error: API key for the selected provider is not set or loaded. Please check Settings.";
   }
 
   let endpoint = '';
@@ -57,42 +65,35 @@ async function callLlmApi(
         endpoint = 'https://api.openai.com/v1/chat/completions';
         headers['Authorization'] = `Bearer ${apiKey}`;
         body = {
-          model: "gpt-4o", // Or another suitable model
+          model: "gpt-4o",
           messages: [
             { role: "system", content: systemPrompt },
-            ...messages.map(msg => ({ role: msg.sender, content: msg.content }))
+            ...messages.map(msg => ({ role: msg.sender === 'ai' ? 'assistant' : 'user', content: msg.content })) // Map sender correctly
           ],
-          // max_tokens: 1000, // Optional: Limit response length
         };
         break;
 
       case 'claude':
         endpoint = 'https://api.anthropic.com/v1/messages';
         headers['x-api-key'] = apiKey;
-        headers['anthropic-version'] = '2023-06-01'; // Required header
-        // Claude API expects system prompt differently
+        headers['anthropic-version'] = '2023-06-01';
         body = {
-          model: "claude-3-opus-20240229", // Or another suitable model
+          model: "claude-3-opus-20240229",
           system: systemPrompt,
-          messages: messages.map(msg => ({ role: msg.sender, content: msg.content })),
-          max_tokens: 1024, // Required for Claude
+          messages: messages.map(msg => ({ role: msg.sender === 'ai' ? 'assistant' : 'user', content: msg.content })), // Map sender correctly
+          max_tokens: 1024,
         };
         break;
 
       case 'openrouter':
         endpoint = 'https://openrouter.ai/api/v1/chat/completions';
         headers['Authorization'] = `Bearer ${apiKey}`;
-        // OpenRouter uses OpenAI format but needs model specified
-        // We'll default to a known good model, could be made configurable later
         body = {
-          model: "openai/gpt-4o", // Example: Specify model via provider/model_name
+          model: "openai/gpt-4o",
           messages: [
             { role: "system", content: systemPrompt },
-            ...messages.map(msg => ({ role: msg.sender, content: msg.content }))
+            ...messages.map(msg => ({ role: msg.sender === 'ai' ? 'assistant' : 'user', content: msg.content })) // Map sender correctly
           ],
-          // Add site header for identification (optional but recommended by OpenRouter)
-          // headers['HTTP-Referer'] = $YOUR_SITE_URL;
-          // headers['X-Title'] = $YOUR_SITE_NAME;
         };
         break;
 
@@ -120,7 +121,6 @@ async function callLlmApi(
     if (provider === 'openai' || provider === 'openrouter') {
       aiContent = data.choices?.[0]?.message?.content;
     } else if (provider === 'claude') {
-      // Claude's response structure is different
       aiContent = data.content?.[0]?.text;
     }
 
@@ -138,47 +138,78 @@ async function callLlmApi(
 }
 // --- End LLM API Call Implementation ---
 
-// Define props for the component
-interface WalkthroughModeProps {
-  apiKeys: { openai: string; claude: string; openrouter: string };
-  provider: ApiProvider;
-}
+// Removed WalkthroughModeProps interface
 
-export function WalkthroughMode({ apiKeys, provider }: WalkthroughModeProps) { // Accept props
+export function WalkthroughMode() { // Removed props
   const [systemInfo, setSystemInfo] = useState<SystemInfo>({});
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [userInput, setUserInput] = useState('');
   const [isLoading, setIsLoading] = useState(false); // For LLM responses
   const [isFetchingSysInfo, setIsFetchingSysInfo] = useState(true);
-  // No longer need scrollAreaRef if we target the viewport directly or wrap content
-  const viewportRef = useRef<HTMLDivElement>(null); // Ref for the scrollable content wrapper
+  const [isFetchingSettings, setIsFetchingSettings] = useState(true); // New state for settings loading
+  const [settingsError, setSettingsError] = useState<string | null>(null); // New state for settings error
+  const [appSettings, setAppSettings] = useState<AppSettings | null>(null); // State to hold fetched settings
 
-  // Fetch system info on mount
+  const viewportRef = useRef<HTMLDivElement>(null);
+
+  // Fetch system info and settings on mount
   useEffect(() => {
-    const fetchSystemInfo = async () => {
+    const fetchInitialData = async () => {
       setIsFetchingSysInfo(true);
+      setIsFetchingSettings(true);
+      setSettingsError(null);
+
+      let sysInfoError: string | undefined;
+      let initialMsgContent = 'Hello! How can I help you today?';
+
+      // Fetch System Info
       try {
         const os = await invoke<OsInfo>('get_os_info');
         const memory = await invoke<MemoryInfo>('get_memory_info');
         setSystemInfo({ os, memory });
-        // Add initial AI message after fetching info
-        setMessages([{ sender: 'ai', content: 'Hello! How can I help you today? I have some basic info about your system.' }]);
+        initialMsgContent += ' I have some basic info about your system.';
       } catch (error) {
         console.error("Failed to fetch system info:", error);
-        setSystemInfo({ error: 'Could not load system information.' });
-        setMessages([{ sender: 'ai', content: 'Hello! How can I help you today? (Note: I could not retrieve system info).' }]);
+        sysInfoError = 'Could not load system information.';
+        setSystemInfo({ error: sysInfoError });
+        initialMsgContent += ' (Note: I could not retrieve system info).';
       } finally {
         setIsFetchingSysInfo(false);
       }
+
+      // Fetch Settings
+      try {
+        console.log("Invoking get_settings in WalkthroughMode...");
+        const loadedSettings = await invoke<AppSettings>('get_settings');
+        console.log("Settings received in WalkthroughMode:", loadedSettings);
+        setAppSettings(loadedSettings);
+        if (!loadedSettings.openai_api_key && !loadedSettings.claude_api_key && !loadedSettings.open_router_api_key) {
+            initialMsgContent += ' Please set an API key in Settings to enable AI responses.';
+            setSettingsError('No API key found. Please configure in Settings.');
+        } else if (!loadedSettings[`${loadedSettings.walkthrough_provider}_api_key` as keyof AppSettings]) {
+             initialMsgContent += ` The API key for the selected provider (${loadedSettings.walkthrough_provider}) is missing. Please check Settings.`;
+             setSettingsError(`API key for ${loadedSettings.walkthrough_provider} is missing.`);
+        }
+      } catch (err) {
+        console.error("Failed to load settings via invoke:", err);
+        const errorMsg = `Failed to load settings: ${err instanceof Error ? err.message : String(err)}`;
+        setSettingsError(errorMsg);
+        initialMsgContent += ' Could not load API settings.';
+      } finally {
+        setIsFetchingSettings(false);
+      }
+
+      // Set initial message after all fetching attempts
+      setMessages([{ sender: 'ai', content: initialMsgContent }]);
     };
-    fetchSystemInfo();
-  }, []);
+
+    fetchInitialData();
+  }, []); // Empty dependency array ensures this runs only once on mount
 
   // Scroll to bottom when messages change
   useEffect(() => {
     const element = viewportRef.current;
     if (element) {
-      // Use requestAnimationFrame for smoother scrolling after render
       requestAnimationFrame(() => {
         element.scrollTop = element.scrollHeight;
       });
@@ -187,7 +218,14 @@ export function WalkthroughMode({ apiKeys, provider }: WalkthroughModeProps) { /
 
 
   const handleSendMessage = useCallback(async () => {
-    if (!userInput.trim() || isLoading || isFetchingSysInfo) return;
+    // Ensure settings are loaded and valid before sending
+    if (!userInput.trim() || isLoading || isFetchingSysInfo || isFetchingSettings || settingsError || !appSettings) {
+        if (settingsError) {
+            console.warn("Cannot send message due to settings error:", settingsError);
+            // Optionally show a more prominent error to the user
+        }
+        return;
+    }
 
     const newUserMessage: ChatMessage = { sender: 'user', content: userInput };
     const updatedMessages = [...messages, newUserMessage];
@@ -195,13 +233,12 @@ export function WalkthroughMode({ apiKeys, provider }: WalkthroughModeProps) { /
     setUserInput('');
     setIsLoading(true);
 
-    // Construct system prompt
+    // Construct system prompt (same as before)
     let systemPrompt = "You are a helpful AI tech support assistant.";
     if (systemInfo.os) {
       systemPrompt += ` The user is on ${systemInfo.os.os_type} ${systemInfo.os.os_release}.`;
     }
     if (systemInfo.memory) {
-      // Convert KB to GB for readability
       const totalGb = (systemInfo.memory.total_mem / 1024 / 1024).toFixed(1);
       systemPrompt += ` They have approximately ${totalGb} GB RAM.`;
     }
@@ -209,35 +246,36 @@ export function WalkthroughMode({ apiKeys, provider }: WalkthroughModeProps) { /
         systemPrompt += ` (Error fetching system details: ${systemInfo.error})`;
     }
 
-    // Get the correct API key based on the selected provider
+    // Get the correct API key and provider from state
+    const provider = appSettings.walkthrough_provider;
     let apiKey: string | undefined;
     switch (provider) {
         case 'openai':
-            apiKey = apiKeys.openai;
+            apiKey = appSettings.openai_api_key;
             break;
         case 'claude':
-            apiKey = apiKeys.claude;
+            apiKey = appSettings.claude_api_key;
             break;
         case 'openrouter':
-            apiKey = apiKeys.openrouter;
+            apiKey = appSettings.open_router_api_key;
             break;
         default:
             apiKey = undefined;
     }
 
-
     try {
       const aiResponseContent = await callLlmApi(updatedMessages, systemPrompt, provider, apiKey);
       const newAiMessage: ChatMessage = { sender: 'ai', content: aiResponseContent };
       setMessages(prev => [...prev, newAiMessage]);
-    } catch (error) {
+    } catch (error) { // This catch might be redundant if callLlmApi handles errors internally
       console.error("LLM API call failed:", error);
-      const errorAiMessage: ChatMessage = { sender: 'ai', content: "Sorry, I encountered an error trying to respond." };
+      const errorAiMessage: ChatMessage = { sender: 'ai', content: `Sorry, I encountered an error trying to respond. (${error instanceof Error ? error.message : String(error)})` };
       setMessages(prev => [...prev, errorAiMessage]);
     } finally {
       setIsLoading(false);
     }
-  }, [userInput, isLoading, messages, systemInfo, isFetchingSysInfo, apiKeys, provider]); // Add apiKeys and provider to dependency array
+    // Update dependencies for useCallback
+  }, [userInput, isLoading, messages, systemInfo, isFetchingSysInfo, isFetchingSettings, settingsError, appSettings]);
 
 
   return (
@@ -245,21 +283,21 @@ export function WalkthroughMode({ apiKeys, provider }: WalkthroughModeProps) { /
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5 }}
-      className="w-full max-w-3xl h-[80vh] flex flex-col" // Increased height
+      className="w-full max-w-3xl h-[80vh] flex flex-col"
     >
-      <Card className="flex-grow flex flex-col overflow-hidden"> {/* Added overflow-hidden */}
+      <Card className="flex-grow flex flex-col overflow-hidden">
         <CardHeader>
           <CardTitle>Walkthrough Mode</CardTitle>
           <CardDescription>
             Ask your tech support questions below.
-            {isFetchingSysInfo && <span className="text-xs text-muted-foreground ml-2">(Loading system info...)</span>}
+            {(isFetchingSysInfo || isFetchingSettings) && <span className="text-xs text-muted-foreground ml-2">(Loading...)</span>}
             {systemInfo.error && <span className="text-xs text-red-500 ml-2">({systemInfo.error})</span>}
+            {settingsError && <span className="text-xs text-red-500 ml-2">({settingsError})</span>}
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex-grow flex flex-col space-y-4 overflow-hidden"> {/* Added overflow-hidden */}
-          {/* Apply ref to the direct child div inside ScrollArea */}
+        <CardContent className="flex-grow flex flex-col space-y-4 overflow-hidden">
           <ScrollArea className="flex-grow pr-4 -mr-4">
-            <div ref={viewportRef} className="h-full space-y-4 pb-4"> {/* Apply ref here and ensure height */}
+            <div ref={viewportRef} className="h-full space-y-4 pb-4">
               {messages.map((msg, index) => (
                 <div
                   key={index}
@@ -269,14 +307,13 @@ export function WalkthroughMode({ apiKeys, provider }: WalkthroughModeProps) { /
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.3 }}
-                    className={`max-w-[75%] p-3 rounded-lg shadow-sm ${ // Added shadow
+                    className={`max-w-[75%] p-3 rounded-lg shadow-sm ${
                       msg.sender === 'user'
                         ? 'bg-blue-600 text-white'
                         : 'bg-secondary text-secondary-foreground'
                     }`}
                   >
-                    {/* Basic rendering, consider markdown later */}
-                    {msg.content.split('\n').map((line, i) => <p key={i}>{line || '\u00A0'}</p>)} {/* Render empty lines */}
+                    {msg.content.split('\n').map((line, i) => <p key={i}>{line || '\u00A0'}</p>)}
                   </motion.div>
                 </div>
               ))}
@@ -294,16 +331,21 @@ export function WalkthroughMode({ apiKeys, provider }: WalkthroughModeProps) { /
                )}
             </div>
           </ScrollArea>
-          <div className="flex space-x-2 pt-4 border-t"> {/* Input area */}
+          <div className="flex space-x-2 pt-4 border-t">
             <Input
               placeholder="Type your question..."
               value={userInput}
               onChange={(e) => setUserInput(e.target.value)}
               onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
-              disabled={isLoading || isFetchingSysInfo}
+              disabled={isLoading || isFetchingSysInfo || isFetchingSettings || !!settingsError} // Disable if loading or error
               aria-label="Chat input"
             />
-            <Button onClick={handleSendMessage} disabled={isLoading || isFetchingSysInfo || !userInput.trim()} size="icon" aria-label="Send message">
+            <Button
+                onClick={handleSendMessage}
+                disabled={isLoading || isFetchingSysInfo || isFetchingSettings || !!settingsError || !userInput.trim()} // Disable if loading, error, or no input
+                size="icon"
+                aria-label="Send message"
+            >
               <Send className="h-4 w-4" />
             </Button>
           </div>
