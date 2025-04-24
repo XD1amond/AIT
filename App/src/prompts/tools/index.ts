@@ -1,0 +1,1 @@
+// Tool prompts will be defined here

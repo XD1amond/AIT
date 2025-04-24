@@ -6,6 +6,7 @@ use std::fs; // Import fs for directory creation
 use std::path::Path; // Import Path for parent directory access
 
 const SETTINGS_FILE: &str = "settings.store"; // Use .store extension convention
+const CHAT_HISTORY_FILE: &str = "chats.store"; // Store file for chat history
 
 // Define structs for the data we want to return
 #[derive(Serialize, Clone)]
@@ -92,6 +93,34 @@ fn default_action_model() -> String {
     "gpt-4o".to_string() // Example default
 }
 
+// --- Chat Storage Structs ---
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+enum MessageSender {
+    #[serde(rename = "user")]
+    User,
+    #[serde(rename = "ai")]
+    Ai,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct RustChatMessage {
+    sender: MessageSender,
+    content: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct RustSavedChat {
+    id: String,
+    timestamp: u64, // Using u64 for timestamp consistency
+    mode: String, // Keep simple string for mode ('action' | 'walkthrough')
+    messages: Vec<RustChatMessage>,
+    #[serde(default)] // Optional title
+    title: Option<String>,
+}
+
+// --- End Chat Storage Structs ---
+
 
 // Tauri command to get OS information
 #[tauri::command]
@@ -109,8 +138,16 @@ fn get_memory_info() -> Result<MemoryInfo, String> {
     Ok(MemoryInfo {
         total_mem: mem_info.total,
         free_mem: mem_info.free,
-    })
-}
+        })
+    }
+    
+    // Tauri command to get the current working directory
+    #[tauri::command]
+    fn get_cwd() -> Result<String, String> {
+        std::env::current_dir()
+            .map_err(|e| format!("Failed to get current working directory: {}", e))
+            .map(|path| path.to_string_lossy().to_string()) // Convert PathBuf to String
+    }
 
 // Tauri command to get settings from store
 #[tauri::command]
@@ -191,11 +228,229 @@ fn save_settings(settings: AppSettings, app: AppHandle) -> Result<(), String> {
     store.set("app_settings".to_string(), settings_value); // Use set(), returns () so no ? needed
 
     // Persist changes to disk
-    store.save().map_err(|e| format!("Failed to save store: {}", e))
-}
-
-
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
+        store.save().map_err(|e| format!("Failed to save store: {}", e))
+    }
+    
+    // --- Chat Storage Commands ---
+    
+    // Helper function to get the chat store instance
+    use std::sync::Arc; // Import Arc
+    
+    // Helper function to get the chat store instance
+    fn get_chat_store(app: &AppHandle) -> Result<Arc<tauri_plugin_store::Store<tauri::Wry>>, String> { // Changed return type to Arc<Store>
+        let store_path = app.path().resolve(CHAT_HISTORY_FILE, tauri::path::BaseDirectory::AppData)
+            .map_err(|e| format!("Failed to resolve chat store path: {}", e))?;
+    
+        // Ensure the parent directory exists
+        if let Some(parent_dir) = Path::new(&store_path).parent() {
+            fs::create_dir_all(parent_dir)
+                .map_err(|e| format!("Failed to create chat store directory: {}", e))?;
+        } else {
+            return Err("Failed to get parent directory for chat store file".to_string());
+        }
+    
+        let store = StoreBuilder::new(app.app_handle(), store_path.clone()).build()
+            .map_err(|e| format!("Failed to build chat store: {}", e))?;
+    
+        // Reload the store from disk, handling NotFound error
+        match store.reload() {
+            Ok(_) => {} // Reload successful, continue
+            Err(StoreError::Io(e)) if e.kind() == ErrorKind::NotFound => {
+                // File not found is okay on first load or if no chats saved yet
+            }
+            Err(e) => return Err(format!("Failed to reload chat store: {}", e)), // Propagate other errors
+        }
+        Ok(store)
+    }
+    
+    
+    // Tauri command to get all saved chats
+    #[tauri::command]
+    fn get_all_chats(app: AppHandle) -> Result<Vec<RustSavedChat>, String> {
+        let store = get_chat_store(&app)?;
+    
+        match store.get("chat_history") {
+            Some(chats_value) => {
+                serde_json::from_value(chats_value.clone())
+                    .map_err(|e| format!("Failed to deserialize chat history: {}", e))
+            },
+            None => {
+                // No chats found, return empty vector
+                Ok(Vec::new())
+            }
+        }
+    }
+    
+    // Tauri command to save a chat (add or update)
+    #[tauri::command]
+    fn save_chat(chat: RustSavedChat, app: AppHandle) -> Result<(), String> {
+        let store = get_chat_store(&app)?;
+    
+        // Get current chats or default to empty vec
+        let mut chats: Vec<RustSavedChat> = match store.get("chat_history") {
+            Some(chats_value) => serde_json::from_value(chats_value.clone())
+                .map_err(|e| format!("Failed to deserialize chat history before saving: {}", e))?,
+            None => Vec::new(),
+        };
+    
+        // Find if chat exists and update, otherwise add
+        if let Some(index) = chats.iter().position(|c| c.id == chat.id) {
+            chats[index] = chat; // Update existing
+        } else {
+            chats.push(chat); // Add new
+        }
+    
+        // Sort by timestamp descending (optional, but keeps it ordered)
+        chats.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    
+        // Serialize the updated chat list
+        let chats_value = serde_json::to_value(&chats)
+            .map_err(|e| format!("Failed to serialize chat history: {}", e))?;
+    
+        // Set the value in the store
+        store.set("chat_history".to_string(), chats_value); // Use set()
+    
+        // Persist changes
+        store.save().map_err(|e| format!("Failed to save chat store: {}", e))
+    }
+    
+    // Tauri command to delete a chat by ID
+    #[tauri::command]
+    fn delete_chat(chat_id: String, app: AppHandle) -> Result<(), String> {
+        let store = get_chat_store(&app)?;
+    
+        // Get current chats or return early if none
+        let mut chats: Vec<RustSavedChat> = match store.get("chat_history") {
+            Some(chats_value) => serde_json::from_value(chats_value.clone())
+                .map_err(|e| format!("Failed to deserialize chat history before deleting: {}", e))?,
+            None => return Ok(()), // Nothing to delete
+        };
+    
+        // Remove the chat with the matching ID
+        chats.retain(|c| c.id != chat_id);
+    
+        // Serialize the updated chat list
+        let chats_value = serde_json::to_value(&chats)
+            .map_err(|e| format!("Failed to serialize chat history after delete: {}", e))?;
+    
+        // Set the value in the store
+        store.set("chat_history".to_string(), chats_value); // Use set()
+    
+        // Persist changes
+        store.save().map_err(|e| format!("Failed to save chat store after delete: {}", e))
+    }
+    
+    
+    // --- Unit Tests ---
+    #[cfg(test)]
+    mod tests {
+        use super::*; // Import items from parent module
+    
+        // Helper to create a dummy chat message
+        fn create_dummy_message(sender: MessageSender, content: &str) -> RustChatMessage {
+            RustChatMessage {
+                sender,
+                content: content.to_string(),
+            }
+        }
+    
+        // Helper to create a dummy saved chat
+        fn create_dummy_saved_chat(id: &str, timestamp: u64, mode: &str) -> RustSavedChat {
+            RustSavedChat {
+                id: id.to_string(),
+                timestamp,
+                mode: mode.to_string(),
+                messages: vec![
+                    create_dummy_message(MessageSender::User, "Hello"),
+                    create_dummy_message(MessageSender::Ai, "Hi"),
+                ],
+                title: Some(format!("Test Chat {}", id)),
+            }
+        }
+    
+        #[test]
+        fn test_add_new_chat_and_sort() {
+            let mut chats: Vec<RustSavedChat> = vec![
+                create_dummy_saved_chat("chat2", 200, "walkthrough"),
+            ];
+            let new_chat = create_dummy_saved_chat("chat1", 100, "action"); // Older chat
+    
+            // Simulate adding new chat
+            if !chats.iter().any(|c| c.id == new_chat.id) {
+                chats.push(new_chat.clone());
+            }
+    
+            // Simulate sorting (descending timestamp)
+            chats.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    
+            assert_eq!(chats.len(), 2);
+            assert_eq!(chats[0].id, "chat2"); // Newest first
+            assert_eq!(chats[1].id, "chat1");
+    
+            // Add another chat, newer than chat2
+            let newer_chat = create_dummy_saved_chat("chat3", 300, "walkthrough");
+             if !chats.iter().any(|c| c.id == newer_chat.id) {
+                chats.push(newer_chat.clone());
+            }
+            chats.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    
+            assert_eq!(chats.len(), 3);
+            assert_eq!(chats[0].id, "chat3"); // Newest
+            assert_eq!(chats[1].id, "chat2");
+            assert_eq!(chats[2].id, "chat1"); // Oldest
+        }
+    
+        #[test]
+        fn test_update_existing_chat() {
+             let mut chats: Vec<RustSavedChat> = vec![
+                create_dummy_saved_chat("chat1", 100, "walkthrough"),
+                create_dummy_saved_chat("chat2", 200, "action"),
+            ];
+    
+            // Create an updated version of chat1
+            let mut updated_chat1 = create_dummy_saved_chat("chat1", 250, "walkthrough"); // New timestamp
+            updated_chat1.messages.push(create_dummy_message(MessageSender::User, "Update"));
+    
+            // Simulate updating
+            if let Some(index) = chats.iter().position(|c| c.id == updated_chat1.id) {
+                chats[index] = updated_chat1.clone();
+            } else {
+                 panic!("Chat should have existed for update"); // Fail test if not found
+            }
+    
+            // Simulate sorting
+            chats.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    
+            assert_eq!(chats.len(), 2);
+            assert_eq!(chats[0].id, "chat1"); // chat1 is now newest due to updated timestamp
+            assert_eq!(chats[0].messages.len(), 3); // Check message was added
+            assert_eq!(chats[1].id, "chat2");
+        }
+    
+         #[test]
+        fn test_delete_chat_logic() {
+            let mut chats: Vec<RustSavedChat> = vec![
+                create_dummy_saved_chat("chat1", 100, "walkthrough"),
+                create_dummy_saved_chat("chat2", 200, "action"),
+                create_dummy_saved_chat("chat3", 300, "walkthrough"),
+            ];
+            let chat_id_to_delete = "chat2".to_string();
+    
+            // Simulate deletion using retain
+            chats.retain(|c| c.id != chat_id_to_delete);
+    
+            assert_eq!(chats.len(), 2);
+            assert!(!chats.iter().any(|c| c.id == chat_id_to_delete)); // Ensure chat2 is gone
+            assert!(chats.iter().any(|c| c.id == "chat1"));
+            assert!(chats.iter().any(|c| c.id == "chat3"));
+        }
+    }
+    // --- End Unit Tests ---
+    
+    // --- End Chat Storage Commands ---
+    
+    
+    #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
     .plugin(tauri_plugin_store::Builder::new().build()) // Simplified plugin init
@@ -203,9 +458,14 @@ pub fn run() {
         get_os_info,
         get_memory_info,
         get_settings, // Add new command
-        save_settings // Add new command
-    ])
-    .setup(|app| {
+                save_settings, // Add new command
+                // Add chat commands
+                get_all_chats,
+                save_chat,
+                        delete_chat,
+                        get_cwd // Add the new command
+                    ])
+                    .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
           tauri_plugin_log::Builder::default()
