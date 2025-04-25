@@ -10,7 +10,7 @@ import { ToolApproval } from '@/components/ui/tool-approval';
 import { getSystemInfoPrompt } from '@/prompts/system-info';
 import { ToolUse, ToolResponse, ToolProgressStatus } from '@/prompts/tools/types';
 import { parseToolUse, containsToolUse, extractTextAroundToolUse } from '@/prompts/tools/tool-parser';
-import { executeTool } from '@/prompts/tools';
+import { executeTool, isToolEnabled, shouldAutoApprove, isCommandWhitelisted, isCommandBlacklisted, ToolSettings } from '@/prompts/tools';
 
 // Define a type for messages in Action Mode
 interface ActionMessage {
@@ -25,6 +25,12 @@ interface AppSettings {
   action_provider: string;
   action_model: string;
   auto_approve_tools: boolean;
+  walkthrough_tools: Record<string, boolean>;
+  action_tools: Record<string, boolean>;
+  auto_approve_walkthrough: Record<string, boolean>;
+  auto_approve_action: Record<string, boolean>;
+  whitelisted_commands: string[];
+  blacklisted_commands: string[];
   [key: string]: any;
 }
 
@@ -133,6 +139,21 @@ export function ActionMode() {
     }
   }, [messages]);
 
+  // Get tool settings from app settings
+  const getToolSettings = (): ToolSettings => {
+    if (!settings) return {};
+    
+    return {
+      auto_approve_tools: settings.auto_approve_tools,
+      walkthrough_tools: settings.walkthrough_tools,
+      action_tools: settings.action_tools,
+      auto_approve_walkthrough: settings.auto_approve_walkthrough,
+      auto_approve_action: settings.auto_approve_action,
+      whitelisted_commands: settings.whitelisted_commands,
+      blacklisted_commands: settings.blacklisted_commands,
+    };
+  };
+
   // Handle tool approval
   const handleToolApproval = async (approved: boolean) => {
     if (!pendingToolUse) return;
@@ -142,10 +163,10 @@ export function ActionMode() {
     
     if (!approved) {
       // Add rejection message
-      setMessages(prev => [...prev, { 
-        id: nextId.current++, 
-        type: 'error', 
-        content: 'Tool use rejected by user.' 
+      setMessages(prev => [...prev, {
+        id: nextId.current++,
+        type: 'error',
+        content: 'Tool use rejected by user.'
       }]);
       setIsLoading(false);
       return;
@@ -163,10 +184,46 @@ export function ActionMode() {
     });
     
     try {
+      // Check if the tool is enabled for action mode
+      if (!isToolEnabled(toolUse.name, 'action', getToolSettings())) {
+        const errorMessage = `Tool '${toolUse.name}' is not enabled for action mode.`;
+        setMessages(prev => [...prev, {
+          id: nextId.current++,
+          type: 'error',
+          content: errorMessage
+        }]);
+        setIsLoading(false);
+        setToolProgress(null);
+        return;
+      }
+      
+      // Special handling for command tool
+      if (toolUse.name === 'command' && toolUse.params.command && typeof toolUse.params.command === 'string') {
+        const command = toolUse.params.command;
+        
+        // Check blacklist first (blacklist overrides whitelist)
+        if (isCommandBlacklisted(command, getToolSettings())) {
+          const errorMessage = `Command '${command}' is blacklisted and cannot be executed.`;
+          setMessages(prev => [...prev, {
+            id: nextId.current++,
+            type: 'error',
+            content: errorMessage
+          }]);
+          setIsLoading(false);
+          setToolProgress(null);
+          return;
+        }
+      }
+      
       // Execute the tool
-      const result = await executeTool(toolUse, (status) => {
-        setToolProgress(status);
-      });
+      const result = await executeTool(
+        toolUse,
+        (status) => {
+          setToolProgress(status);
+        },
+        'action',
+        getToolSettings()
+      );
       
       // Add tool response message
       setMessages(prev => [...prev, { 
@@ -307,8 +364,41 @@ export function ActionMode() {
             toolUse 
           }]);
           
+          // Check if the tool is enabled for action mode
+          if (!isToolEnabled(toolUse.name, 'action', getToolSettings())) {
+            setMessages(prev => [...prev, {
+              id: nextId.current++,
+              type: 'error',
+              content: `Tool '${toolUse.name}' is not enabled for action mode.`
+            }]);
+            setIsLoading(false);
+            return;
+          }
+          
+          // Special handling for command tool
+          if (toolUse.name === 'command' && toolUse.params.command && typeof toolUse.params.command === 'string') {
+            const command = toolUse.params.command;
+            
+            // Check blacklist first (blacklist overrides whitelist)
+            if (isCommandBlacklisted(command, getToolSettings())) {
+              setMessages(prev => [...prev, {
+                id: nextId.current++,
+                type: 'error',
+                content: `Command '${command}' is blacklisted and cannot be executed.`
+              }]);
+              setIsLoading(false);
+              return;
+            }
+            
+            // If command is whitelisted, execute it without approval
+            if (isCommandWhitelisted(command, getToolSettings())) {
+              await executeToolAndUpdateMessages(toolUse);
+              return;
+            }
+          }
+          
           // Check if auto-approve is enabled
-          if (settings.auto_approve_tools) {
+          if (settings.auto_approve_tools || shouldAutoApprove(toolUse.name, 'action', getToolSettings())) {
             // Auto-approve the tool use
             await executeToolAndUpdateMessages(toolUse);
           } else {
@@ -346,12 +436,29 @@ export function ActionMode() {
   };
 
   const handleSubmit = async () => {
-    if (!task.trim() || isLoading || isFetchingSettings) return;
+    if (!task.trim() || isLoading) return;
+    
+    // If settings are not loaded, try to load them
+    if (!settings && !isFetchingSettings) {
+      try {
+        if (typeof window !== 'undefined' && 'Tauri' in window) {
+          const tauriApi = window as any;
+          if (tauriApi.__TAURI__?.invoke) {
+            const loadedSettings = await tauriApi.__TAURI__.invoke('get_settings');
+            setSettings(loadedSettings);
+          }
+        }
+      } catch (error) {
+        console.error("Failed to fetch settings:", error);
+      }
+    }
+    
+    // If settings are still not loaded, show error
     if (!settings) {
-      setMessages(prev => [...prev, { 
-        id: nextId.current++, 
-        type: 'error', 
-        content: 'Settings not loaded. Please try again.' 
+      setMessages(prev => [...prev, {
+        id: nextId.current++,
+        type: 'error',
+        content: 'Settings not loaded. Please try again.'
       }]);
       return;
     }
@@ -464,14 +571,14 @@ export function ActionMode() {
           value={task}
           onChange={(e) => setTask(e.target.value)}
           onKeyPress={(e) => e.key === 'Enter' && handleSubmit()}
-          disabled={isLoading || isFetchingSettings}
+          disabled={isLoading}
           className="flex-1 h-12" // Reduced height to h-12
           aria-label="Task input"
         />
         {/* Adjusted button size to match input */}
         <Button 
           onClick={handleSubmit} 
-          disabled={isLoading || isFetchingSettings || !task.trim()} 
+          disabled={isLoading || !task.trim()}
           className="h-12 w-12" 
           aria-label="Submit task"
         >

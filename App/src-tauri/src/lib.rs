@@ -56,6 +56,24 @@ struct AppSettings {
     // Tool settings
     #[serde(default)] // Defaults to false
     auto_approve_tools: bool,
+    
+    // Tool availability settings
+    #[serde(default)] // Defaults to empty map
+    walkthrough_tools: std::collections::HashMap<String, bool>,
+    #[serde(default)] // Defaults to empty map
+    action_tools: std::collections::HashMap<String, bool>,
+    
+    // Auto approve settings
+    #[serde(default)] // Defaults to empty map
+    auto_approve_walkthrough: std::collections::HashMap<String, bool>,
+    #[serde(default)] // Defaults to empty map
+    auto_approve_action: std::collections::HashMap<String, bool>,
+    
+    // Command whitelist and blacklist
+    #[serde(default)] // Defaults to empty vector
+    whitelisted_commands: Vec<String>,
+    #[serde(default)] // Defaults to empty vector
+    blacklisted_commands: Vec<String>,
 
     // Appearance
     #[serde(default)] // Defaults to Theme::default() -> System

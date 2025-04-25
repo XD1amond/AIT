@@ -1,8 +1,14 @@
 use std::process::Command;
 use std::path::Path;
+use std::fs;
+use std::sync::Mutex;
 use tauri::command;
 use serde::{Deserialize, Serialize};
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, AUTHORIZATION};
+use once_cell::sync::Lazy;
+
+// Global settings storage
+static SETTINGS: Lazy<Mutex<Option<AppSettings>>> = Lazy::new(|| Mutex::new(None));
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OsInfo {
@@ -17,7 +23,7 @@ pub struct MemoryInfo {
     pub free_mem: u64,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppSettings {
     pub openai_api_key: String,
     pub claude_api_key: String,
@@ -28,6 +34,15 @@ pub struct AppSettings {
     pub action_provider: String,
     pub action_model: String,
     pub auto_approve_tools: bool,
+    // Tool availability settings
+    pub walkthrough_tools: std::collections::HashMap<String, bool>,
+    pub action_tools: std::collections::HashMap<String, bool>,
+    // Auto approve settings
+    pub auto_approve_walkthrough: std::collections::HashMap<String, bool>,
+    pub auto_approve_action: std::collections::HashMap<String, bool>,
+    // Command whitelist and blacklist
+    pub whitelisted_commands: Vec<String>,
+    pub blacklisted_commands: Vec<String>,
     pub theme: String,
 }
 
@@ -115,10 +130,24 @@ pub fn get_memory_info() -> MemoryInfo {
     }
 }
 
-// Get settings
-#[command]
-pub fn get_settings() -> AppSettings {
-    // In a real app, you would load this from a config file or database
+// Create default settings
+fn create_default_settings() -> AppSettings {
+    let mut walkthrough_tools = std::collections::HashMap::new();
+    walkthrough_tools.insert("command".to_string(), true);
+    walkthrough_tools.insert("web_search".to_string(), true);
+    
+    let mut action_tools = std::collections::HashMap::new();
+    action_tools.insert("command".to_string(), true);
+    action_tools.insert("web_search".to_string(), true);
+    
+    let mut auto_approve_walkthrough = std::collections::HashMap::new();
+    auto_approve_walkthrough.insert("command".to_string(), false);
+    auto_approve_walkthrough.insert("web_search".to_string(), false);
+    
+    let mut auto_approve_action = std::collections::HashMap::new();
+    auto_approve_action.insert("command".to_string(), false);
+    auto_approve_action.insert("web_search".to_string(), false);
+    
     AppSettings {
         openai_api_key: "".to_string(),
         claude_api_key: "".to_string(),
@@ -129,16 +158,66 @@ pub fn get_settings() -> AppSettings {
         action_provider: "openai".to_string(),
         action_model: "gpt-4o".to_string(),
         auto_approve_tools: false,
+        walkthrough_tools,
+        action_tools,
+        auto_approve_walkthrough,
+        auto_approve_action,
+        whitelisted_commands: Vec::new(),
+        blacklisted_commands: Vec::new(),
         theme: "system".to_string(),
     }
 }
 
+// Get settings
+#[command]
+pub fn get_settings() -> AppSettings {
+    // Try to get settings from memory first
+    let mut settings_guard = SETTINGS.lock().unwrap();
+    
+    if let Some(settings) = settings_guard.as_ref() {
+        // Return a clone of the settings
+        return settings.clone();
+    }
+    
+    // If not in memory, try to load from file
+    let settings_path = "settings.json";
+    let settings = if Path::new(settings_path).exists() {
+        match fs::read_to_string(settings_path) {
+            Ok(json) => match serde_json::from_str::<AppSettings>(&json) {
+                Ok(settings) => settings,
+                Err(_) => create_default_settings(),
+            },
+            Err(_) => create_default_settings(),
+        }
+    } else {
+        create_default_settings()
+    };
+    
+    // Store in memory for future use
+    *settings_guard = Some(settings.clone());
+    
+    settings
+}
+
 // Save settings
 #[command]
-pub fn save_settings(_settings: AppSettings) -> Result<(), String> {
-    // In a real app, you would save this to a config file or database
-    // For now, we'll just return success
-    Ok(())
+pub fn save_settings(settings: AppSettings) -> Result<(), String> {
+    // Save to memory
+    let mut settings_guard = SETTINGS.lock().unwrap();
+    *settings_guard = Some(settings.clone());
+    
+    // Save to file
+    let settings_path = "settings.json";
+    match serde_json::to_string_pretty(&settings) {
+        Ok(json) => match fs::write(settings_path, json) {
+            Ok(_) => {
+                println!("Settings saved successfully to {}", settings_path);
+                Ok(())
+            },
+            Err(e) => Err(format!("Failed to write settings file: {}", e)),
+        },
+        Err(e) => Err(format!("Failed to serialize settings: {}", e)),
+    }
 }
 
 // Execute a command

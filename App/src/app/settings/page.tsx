@@ -30,6 +30,15 @@ interface AppSettings {
     action_model: string;
     // Tool settings
     auto_approve_tools: boolean; // Added for tool auto-approval
+    // Tool availability settings
+    walkthrough_tools: Record<string, boolean>; // Tools available in walkthrough mode
+    action_tools: Record<string, boolean>; // Tools available in action mode
+    // Auto approve settings
+    auto_approve_walkthrough: Record<string, boolean>; // Auto approve tools in walkthrough mode
+    auto_approve_action: Record<string, boolean>; // Auto approve tools in action mode
+    // Command whitelist and blacklist
+    whitelisted_commands: string[]; // Commands that are always approved
+    blacklisted_commands: string[]; // Commands that are always denied
     // Appearance settings
     theme: Theme;
 }
@@ -61,6 +70,26 @@ export default function SettingsPage() {
 
   // State for Tool Settings
   const [autoApproveTools, setAutoApproveTools] = useState(false);
+  const [walkthroughTools, setWalkthroughTools] = useState<Record<string, boolean>>({
+    command: true,
+    web_search: true
+  });
+  const [actionTools, setActionTools] = useState<Record<string, boolean>>({
+    command: true,
+    web_search: true
+  });
+  const [autoApproveWalkthrough, setAutoApproveWalkthrough] = useState<Record<string, boolean>>({
+    command: false,
+    web_search: false
+  });
+  const [autoApproveAction, setAutoApproveAction] = useState<Record<string, boolean>>({
+    command: false,
+    web_search: false
+  });
+  const [whitelistedCommands, setWhitelistedCommands] = useState<string[]>([]);
+  const [blacklistedCommands, setBlacklistedCommands] = useState<string[]>([]);
+  const [whitelistInput, setWhitelistInput] = useState('');
+  const [blacklistInput, setBlacklistInput] = useState('');
 
   // State for Appearance Tab
   const [theme, setTheme] = useState<Theme>('system');
@@ -97,6 +126,12 @@ export default function SettingsPage() {
 
           // Load Tool settings
           setAutoApproveTools(loadedSettings.auto_approve_tools || false);
+          setWalkthroughTools(loadedSettings.walkthrough_tools || { command: true, web_search: true });
+          setActionTools(loadedSettings.action_tools || { command: true, web_search: true });
+          setAutoApproveWalkthrough(loadedSettings.auto_approve_walkthrough || { command: false, web_search: false });
+          setAutoApproveAction(loadedSettings.auto_approve_action || { command: false, web_search: false });
+          setWhitelistedCommands(loadedSettings.whitelisted_commands || []);
+          setBlacklistedCommands(loadedSettings.blacklisted_commands || []);
 
           // Load Appearance settings
           setTheme(loadedSettings.theme || 'system');
@@ -115,6 +150,12 @@ export default function SettingsPage() {
           setActionProvider('openai');
           setActionModel(PROVIDER_MODELS.openai[0]);
           setAutoApproveTools(false);
+          setWalkthroughTools({ command: true, web_search: true });
+          setActionTools({ command: true, web_search: true });
+          setAutoApproveWalkthrough({ command: false, web_search: false });
+          setAutoApproveAction({ command: false, web_search: false });
+          setWhitelistedCommands([]);
+          setBlacklistedCommands([]);
           setTheme('system');
         } finally {
           setIsLoading(false);
@@ -133,6 +174,12 @@ export default function SettingsPage() {
         setActionProvider('openai');
         setActionModel(PROVIDER_MODELS.openai[0]);
         setAutoApproveTools(false);
+        setWalkthroughTools({ command: true, web_search: true });
+        setActionTools({ command: true, web_search: true });
+        setAutoApproveWalkthrough({ command: false, web_search: false });
+        setAutoApproveAction({ command: false, web_search: false });
+        setWhitelistedCommands([]);
+        setBlacklistedCommands([]);
         setTheme('system');
         setIsLoading(false);
     }
@@ -168,6 +215,12 @@ export default function SettingsPage() {
       action_model: actionModel,
       // Tool settings
       auto_approve_tools: autoApproveTools,
+      walkthrough_tools: walkthroughTools,
+      action_tools: actionTools,
+      auto_approve_walkthrough: autoApproveWalkthrough,
+      auto_approve_action: autoApproveAction,
+      whitelisted_commands: whitelistedCommands,
+      blacklisted_commands: blacklistedCommands,
       // Appearance
       theme: theme,
     };
@@ -424,10 +477,87 @@ export default function SettingsPage() {
                    Configure how AI tools are used in the application.
                  </CardDescription>
                </CardHeader>
-               <CardContent className="space-y-6">
-                 <div className="space-y-3">
-                   <Label className="text-base font-medium">Tool Approval</Label>
-                   <div className="flex items-center space-x-2">
+               <CardContent className="space-y-8">
+                 {/* Tools Subsection */}
+                 <div className="space-y-4">
+                   <h3 className="text-lg font-medium border-b pb-2 mb-4">Tools</h3>
+                   <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+                     Select which tools can be used by the AI in each mode.
+                   </p>
+                   
+                   <div className="space-y-4">
+                     <div className="font-medium">Action Mode Tools</div>
+                     <div className="flex items-center space-x-2">
+                       <input
+                         type="checkbox"
+                         id="action-command"
+                         data-testid="action-command"
+                         checked={actionTools.command}
+                         onChange={(e) => setActionTools({...actionTools, command: e.target.checked})}
+                         disabled={isLoading}
+                         className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                       />
+                       <Label htmlFor="action-command" className="text-sm font-normal">
+                         Execute Command
+                       </Label>
+                     </div>
+                     <div className="flex items-center space-x-2">
+                       <input
+                         type="checkbox"
+                         id="action-web-search"
+                         data-testid="action-web-search"
+                         checked={actionTools.web_search}
+                         onChange={(e) => setActionTools({...actionTools, web_search: e.target.checked})}
+                         disabled={isLoading}
+                         className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                       />
+                       <Label htmlFor="action-web-search" className="text-sm font-normal">
+                         Web Search
+                       </Label>
+                     </div>
+                   </div>
+                   
+                   <div className="space-y-4 mt-6">
+                     <div className="font-medium">Walkthrough Mode Tools</div>
+                     <div className="flex items-center space-x-2">
+                       <input
+                         type="checkbox"
+                         id="walkthrough-command"
+                         data-testid="walkthrough-command"
+                         checked={walkthroughTools.command}
+                         onChange={(e) => setWalkthroughTools({...walkthroughTools, command: e.target.checked})}
+                         disabled={isLoading}
+                         className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                       />
+                       <Label htmlFor="walkthrough-command" className="text-sm font-normal">
+                         Execute Command
+                       </Label>
+                     </div>
+                     <div className="flex items-center space-x-2">
+                       <input
+                         type="checkbox"
+                         id="walkthrough-web-search"
+                         data-testid="walkthrough-web-search"
+                         checked={walkthroughTools.web_search}
+                         onChange={(e) => setWalkthroughTools({...walkthroughTools, web_search: e.target.checked})}
+                         disabled={isLoading}
+                         className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                       />
+                       <Label htmlFor="walkthrough-web-search" className="text-sm font-normal">
+                         Web Search
+                       </Label>
+                     </div>
+                   </div>
+                 </div>
+                 
+                 {/* Auto Approve Subsection */}
+                 <div className="space-y-4">
+                   <h3 className="text-lg font-medium border-b pb-2 mb-4" data-testid="auto-approve-header">Auto Approve</h3>
+                   <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+                     Select which tools should be auto-approved in each mode.
+                   </p>
+                   
+                   <div className="flex items-center space-x-2 mb-4">
                      <input
                        type="checkbox"
                        id="auto-approve"
@@ -437,13 +567,176 @@ export default function SettingsPage() {
                        className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                      />
                      <Label htmlFor="auto-approve" className="text-sm font-normal">
-                       Auto-approve tool usage (skip confirmation dialogs)
+                       Auto-approve all tool usage (skip confirmation dialogs)
                      </Label>
                    </div>
-                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                     When enabled, the AI can use tools without asking for your approval each time.
-                     This is convenient but less secure. Only enable this if you trust the AI.
-                   </p>
+                   
+                   <div className="space-y-4 mt-6">
+                     <div className="font-medium">Action Mode Auto Approve</div>
+                     <div className="flex items-center space-x-2">
+                       <input
+                         type="checkbox"
+                         id="auto-approve-action-command"
+                         data-testid="auto-approve-action-command"
+                         checked={autoApproveAction.command}
+                         onChange={(e) => setAutoApproveAction({...autoApproveAction, command: e.target.checked})}
+                         disabled={isLoading || autoApproveTools || !actionTools.command}
+                         className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                       />
+                       <Label htmlFor="auto-approve-action-command" className="text-sm font-normal">
+                         Execute Command
+                       </Label>
+                     </div>
+                     <div className="flex items-center space-x-2">
+                       <input
+                         type="checkbox"
+                         id="auto-approve-action-web-search"
+                         data-testid="auto-approve-action-web-search"
+                         checked={autoApproveAction.web_search}
+                         onChange={(e) => setAutoApproveAction({...autoApproveAction, web_search: e.target.checked})}
+                         disabled={isLoading || autoApproveTools || !actionTools.web_search}
+                         className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                       />
+                       <Label htmlFor="auto-approve-action-web-search" className="text-sm font-normal">
+                         Web Search
+                       </Label>
+                     </div>
+                   </div>
+                   
+                   <div className="space-y-4 mt-6">
+                     <div className="font-medium">Walkthrough Mode Auto Approve</div>
+                     <div className="flex items-center space-x-2">
+                       <input
+                         type="checkbox"
+                         id="auto-approve-walkthrough-command"
+                         data-testid="auto-approve-walkthrough-command"
+                         checked={autoApproveWalkthrough.command}
+                         onChange={(e) => setAutoApproveWalkthrough({...autoApproveWalkthrough, command: e.target.checked})}
+                         disabled={isLoading || autoApproveTools || !walkthroughTools.command}
+                         className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                       />
+                       <Label htmlFor="auto-approve-walkthrough-command" className="text-sm font-normal">
+                         Execute Command
+                       </Label>
+                     </div>
+                     <div className="flex items-center space-x-2">
+                       <input
+                         type="checkbox"
+                         id="auto-approve-walkthrough-web-search"
+                         data-testid="auto-approve-walkthrough-web-search"
+                         checked={autoApproveWalkthrough.web_search}
+                         onChange={(e) => setAutoApproveWalkthrough({...autoApproveWalkthrough, web_search: e.target.checked})}
+                         disabled={isLoading || autoApproveTools || !walkthroughTools.web_search}
+                         className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                       />
+                       <Label htmlFor="auto-approve-walkthrough-web-search" className="text-sm font-normal">
+                         Web Search
+                       </Label>
+                     </div>
+                   </div>
+                   
+                   {/* Command Whitelist and Blacklist */}
+                   {/* Command Whitelist */}
+                   <div className="mt-6 space-y-4">
+                     <h4 className="text-base font-medium" data-testid="command-whitelist-header">Command Whitelist</h4>
+                     <p className="text-sm text-gray-500 dark:text-gray-400">
+                       Commands that will always be executed without approval.
+                     </p>
+                     
+                     <div className="flex flex-col space-y-2">
+                       <div className="flex space-x-2">
+                         <Input
+                           placeholder="Enter command prefix (e.g., npm test)"
+                           value={whitelistInput}
+                           onChange={(e) => setWhitelistInput(e.target.value)}
+                           onKeyDown={(e) => {
+                             if (e.key === 'Enter' && whitelistInput.trim() !== '') {
+                               setWhitelistedCommands([...whitelistedCommands, whitelistInput.trim()]);
+                               setWhitelistInput('');
+                             }
+                           }}
+                           disabled={isLoading}
+                           className="flex-1"
+                         />
+                         <Button
+                           onClick={() => {
+                             if (whitelistInput.trim() !== '') {
+                               setWhitelistedCommands([...whitelistedCommands, whitelistInput.trim()]);
+                               setWhitelistInput('');
+                             }
+                           }}
+                           disabled={isLoading}
+                         >
+                           Add
+                         </Button>
+                       </div>
+                       
+                       <div className="flex flex-wrap gap-2 mt-2">
+                         {whitelistedCommands.map((cmd, index) => (
+                           <div key={index} className="bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded-md flex items-center">
+                             <span className="mr-1">{cmd}</span>
+                             <button
+                               onClick={() => setWhitelistedCommands(whitelistedCommands.filter((_, i) => i !== index))}
+                               className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                             >
+                               ×
+                             </button>
+                           </div>
+                         ))}
+                       </div>
+                     </div>
+                   </div>
+                   
+                   {/* Command Blacklist */}
+                   <div className="mt-6 space-y-4">
+                     <h4 className="text-base font-medium">Command Blacklist</h4>
+                     <p className="text-sm text-gray-500 dark:text-gray-400">
+                       Commands that will always be denied.
+                     </p>
+                     
+                     <div className="flex flex-col space-y-2">
+                       <div className="flex space-x-2">
+                         <Input
+                           placeholder="Enter command prefix (e.g., rm -rf)"
+                           value={blacklistInput}
+                           onChange={(e) => setBlacklistInput(e.target.value)}
+                           onKeyDown={(e) => {
+                             if (e.key === 'Enter' && blacklistInput.trim() !== '') {
+                               setBlacklistedCommands([...blacklistedCommands, blacklistInput.trim()]);
+                               setBlacklistInput('');
+                             }
+                           }}
+                           disabled={isLoading}
+                           className="flex-1"
+                         />
+                         <Button
+                           onClick={() => {
+                             if (blacklistInput.trim() !== '') {
+                               setBlacklistedCommands([...blacklistedCommands, blacklistInput.trim()]);
+                               setBlacklistInput('');
+                             }
+                           }}
+                           disabled={isLoading}
+                         >
+                           Add
+                         </Button>
+                       </div>
+                       
+                       <div className="flex flex-wrap gap-2 mt-2">
+                         {blacklistedCommands.map((cmd, index) => (
+                           <div key={index} className="bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded-md flex items-center">
+                             <span className="mr-1">{cmd}</span>
+                             <button
+                               onClick={() => setBlacklistedCommands(blacklistedCommands.filter((_, i) => i !== index))}
+                               className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                             >
+                               ×
+                             </button>
+                           </div>
+                         ))}
+                       </div>
+                     </div>
+                   </div>
                  </div>
                </CardContent>
              </Card>

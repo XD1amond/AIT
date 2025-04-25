@@ -12,7 +12,7 @@ import { saveChat, generateChatId, SavedChat } from '../../../lib/chat-storage';
 import { ToolApproval } from '@/components/ui/tool-approval';
 import { ToolUse, ToolResponse, ToolProgressStatus } from '@/prompts/tools/types';
 import { parseToolUse, containsToolUse, extractTextAroundToolUse } from '@/prompts/tools/tool-parser';
-import { executeTool } from '@/prompts/tools';
+import { executeTool, isToolEnabled, shouldAutoApprove, isCommandWhitelisted, isCommandBlacklisted, ToolSettings } from '@/prompts/tools';
 
 // Define ApiProvider type locally
 export type ApiProvider = 'openai' | 'claude' | 'openrouter';
@@ -46,6 +46,12 @@ interface AppSettings {
     action_provider: ApiProvider;
     action_model: string;
     auto_approve_tools: boolean;
+    walkthrough_tools: Record<string, boolean>;
+    action_tools: Record<string, boolean>;
+    auto_approve_walkthrough: Record<string, boolean>;
+    auto_approve_action: Record<string, boolean>;
+    whitelisted_commands: string[];
+    blacklisted_commands: string[];
     theme: string;
 }
 
@@ -100,7 +106,6 @@ async function callLlmApi(
   }
 
   let endpoint = '';
-  // eslint-disable-next-line prefer-const
   let headers: HeadersInit = { 'Content-Type': 'application/json' };
   let body: Record<string, unknown> = {};
 
@@ -358,9 +363,9 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
     
     if (!approved) {
       // Add rejection message
-      const rejectionMessage: ChatMessage = { 
-        sender: 'ai', 
-        content: 'Tool use rejected by user.' 
+      const rejectionMessage: ChatMessage = {
+        sender: 'ai',
+        content: 'Tool use rejected by user.'
       };
       onMessagesUpdate([...initialMessages, rejectionMessage], internalChatId);
       setIsLoading(false);
@@ -369,6 +374,21 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
     
     // Execute the tool
     await executeToolAndUpdateMessages(toolUse);
+  };
+
+  // Get tool settings from app settings
+  const getToolSettings = (): ToolSettings => {
+    if (!appSettings) return {};
+    
+    return {
+      auto_approve_tools: appSettings.auto_approve_tools,
+      walkthrough_tools: appSettings.walkthrough_tools,
+      action_tools: appSettings.action_tools,
+      auto_approve_walkthrough: appSettings.auto_approve_walkthrough,
+      auto_approve_action: appSettings.auto_approve_action,
+      whitelisted_commands: appSettings.whitelisted_commands,
+      blacklisted_commands: appSettings.blacklisted_commands,
+    };
   };
 
   // Execute a tool and update messages with the result
@@ -381,10 +401,44 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
     });
     
     try {
+      // Check if the tool is enabled for walkthrough mode
+      if (!isToolEnabled(toolUse.name, 'walkthrough', getToolSettings())) {
+        const errorMessage: ChatMessage = {
+          sender: 'ai',
+          content: `Tool '${toolUse.name}' is not enabled for walkthrough mode.`
+        };
+        onMessagesUpdate([...initialMessages, errorMessage], internalChatId);
+        setIsLoading(false);
+        setToolProgress(null);
+        return;
+      }
+      
+      // Special handling for command tool
+      if (toolUse.name === 'command' && toolUse.params.command && typeof toolUse.params.command === 'string') {
+        const command = toolUse.params.command;
+        
+        // Check blacklist first (blacklist overrides whitelist)
+        if (isCommandBlacklisted(command, getToolSettings())) {
+          const errorMessage: ChatMessage = {
+            sender: 'ai',
+            content: `Command '${command}' is blacklisted and cannot be executed.`
+          };
+          onMessagesUpdate([...initialMessages, errorMessage], internalChatId);
+          setIsLoading(false);
+          setToolProgress(null);
+          return;
+        }
+      }
+      
       // Execute the tool
-      const result = await executeTool(toolUse, (status) => {
-        setToolProgress(status);
-      });
+      const result = await executeTool(
+        toolUse,
+        (status) => {
+          setToolProgress(status);
+        },
+        'walkthrough',
+        getToolSettings()
+      );
       
       // Add tool response message
       const toolResponseMessage: ChatMessage = { 
@@ -443,15 +497,43 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
     try {
       // Pass the messages to the API with tool use handler
       const aiResponse = await callLlmApi(
-        currentMessages, 
-        finalSystemPrompt, 
-        provider, 
+        currentMessages,
+        finalSystemPrompt,
+        provider,
         apiKey,
         async (toolUse) => {
           // This is called when the AI wants to use a tool
-          if (appSettings.auto_approve_tools) {
+          
+          // Check if the tool is enabled for walkthrough mode
+          if (!isToolEnabled(toolUse.name, 'walkthrough', getToolSettings())) {
+            return {
+              success: false,
+              error: `Tool '${toolUse.name}' is not enabled for walkthrough mode.`,
+            };
+          }
+          
+          // Special handling for command tool
+          if (toolUse.name === 'command' && toolUse.params.command && typeof toolUse.params.command === 'string') {
+            const command = toolUse.params.command;
+            
+            // Check blacklist first (blacklist overrides whitelist)
+            if (isCommandBlacklisted(command, getToolSettings())) {
+              return {
+                success: false,
+                error: `Command '${command}' is blacklisted and cannot be executed.`,
+              };
+            }
+            
+            // If command is whitelisted, execute it without approval
+            if (isCommandWhitelisted(command, getToolSettings())) {
+              return await executeTool(toolUse, undefined, 'walkthrough', getToolSettings());
+            }
+          }
+          
+          // Check if the tool should be auto-approved
+          if (appSettings.auto_approve_tools || shouldAutoApprove(toolUse.name, 'walkthrough', getToolSettings())) {
             // Auto-approve the tool use
-            return await executeTool(toolUse);
+            return await executeTool(toolUse, undefined, 'walkthrough', getToolSettings());
           } else {
             // Request approval
             setPendingToolUse(toolUse);
@@ -480,7 +562,18 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
         }
         
         // Handle the tool use
-        if (appSettings.auto_approve_tools) {
+        // Special handling for command tool
+        if (toolUse.name === 'command' && toolUse.params.command && typeof toolUse.params.command === 'string') {
+          const command = toolUse.params.command;
+          
+          // If command is whitelisted, execute it without approval
+          if (isCommandWhitelisted(command, getToolSettings())) {
+            await executeToolAndUpdateMessages(toolUse);
+            return;
+          }
+        }
+        
+        if (appSettings.auto_approve_tools || shouldAutoApprove(toolUse.name, 'walkthrough', getToolSettings())) {
           // Auto-approve the tool use
           await executeToolAndUpdateMessages(toolUse);
         } else {
@@ -501,15 +594,45 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
 
   // Handle sending a message
   const handleSendMessage = useCallback(async () => {
-    if (!userInput.trim() || isLoading || !internalChatId || !appSettings) {
-      if (!appSettings && !isFetchingSettings) console.warn("Settings not loaded, cannot send message.");
+    if (!userInput.trim() || isLoading || !internalChatId) {
       if (!internalChatId) console.warn("Chat ID not set, cannot send message.");
       return;
     }
+    
+    // If settings are not loaded, try to load them
+    if (!appSettings && !isFetchingSettings) {
+      try {
+        if (typeof window !== 'undefined' && 'Tauri' in window) {
+          const tauriApi = window as any;
+          if (tauriApi.__TAURI__?.invoke) {
+            const loadedSettings = await tauriApi.__TAURI__.invoke('get_settings');
+            setAppSettings(loadedSettings);
+            setSettingsError(null);
+          }
+        }
+      } catch (error) {
+        console.error("Failed to fetch settings:", error);
+        setSettingsError(`Failed to load settings: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    
+    // If settings are still not loaded or there's an error, show error message
+    if (!appSettings) {
+      const errorMessage: ChatMessage = {
+        sender: 'ai',
+        content: 'Settings not loaded. Please try again.'
+      };
+      onMessagesUpdate([...initialMessages, errorMessage], internalChatId);
+      return;
+    }
+    
     if (settingsError) {
-        console.warn("Cannot send message due to settings error:", settingsError);
-        // TODO: Show error to user more prominently?
-        return;
+      const errorMessage: ChatMessage = {
+        sender: 'ai',
+        content: `Error with settings: ${settingsError}. Please check your settings.`
+      };
+      onMessagesUpdate([...initialMessages, errorMessage], internalChatId);
+      return;
     }
 
     const newUserMessage: ChatMessage = { sender: 'user', content: userInput };
@@ -627,13 +750,13 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
           value={userInput}
           onChange={(e) => setUserInput(e.target.value)}
           onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
-          disabled={isLoading || isFetchingSettings || !!settingsError} // Disable if loading/fetching/error
+          disabled={isLoading} // Only disable if loading
           className="flex-1 h-12"
           aria-label="Chat input"
         />
         <Button
             onClick={handleSendMessage}
-            disabled={isLoading || !userInput.trim() || isFetchingSettings || !!settingsError} // Disable if loading/no input/fetching/error
+            disabled={isLoading || !userInput.trim()} // Only disable if loading or no input
             className="h-12 w-12"
             aria-label="Send message"
         >
