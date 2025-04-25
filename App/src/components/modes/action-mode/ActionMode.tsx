@@ -85,11 +85,15 @@ export function ActionMode() {
       try {
         // In a test environment, we'll mock this
         if (typeof window !== 'undefined' && 'Tauri' in window) {
+          // Use a safer approach to check for Tauri API
+          const tauriApi = window as any;
+          
           // Fetch CWD
           try {
-            // @ts-expect-error - Tauri invoke is available at runtime
-            const fetchedCwd = await window.__TAURI__.invoke('get_cwd');
-            setCwd(fetchedCwd);
+            if (tauriApi.__TAURI__?.invoke) {
+              const fetchedCwd = await tauriApi.__TAURI__.invoke('get_cwd');
+              setCwd(fetchedCwd);
+            }
           } catch (error) {
             console.error("Failed to fetch CWD:", error);
             setCwd('unknown');
@@ -97,9 +101,10 @@ export function ActionMode() {
           
           // Fetch settings
           try {
-            // @ts-expect-error - Tauri invoke is available at runtime
-            const loadedSettings = await window.__TAURI__.invoke('get_settings');
-            setSettings(loadedSettings);
+            if (tauriApi.__TAURI__?.invoke) {
+              const loadedSettings = await tauriApi.__TAURI__.invoke('get_settings');
+              setSettings(loadedSettings);
+            }
           } catch (error) {
             console.error("Failed to fetch settings:", error);
           }

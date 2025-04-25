@@ -1,5 +1,16 @@
-import { invoke, isTauri } from '@tauri-apps/api/core';
 import { Tool, CommandToolParams, ToolResponse, ToolProgressStatus } from './types';
+
+// Dynamically import Tauri API to avoid issues during build
+const getTauriApi = async () => {
+  if (typeof window === 'undefined') return { invoke: null, isTauri: null };
+  try {
+    const api = await import('@tauri-apps/api/core');
+    return { invoke: api.invoke, isTauri: api.isTauri };
+  } catch (e) {
+    console.error('Failed to import Tauri API:', e);
+    return { invoke: null, isTauri: null };
+  }
+};
 
 // Command tool implementation
 export const commandTool: Tool = {
@@ -39,8 +50,11 @@ Example:
     });
 
     try {
-      // Check if running in Tauri environment
-      if (!(await isTauri())) {
+      // Dynamically import Tauri API
+      const { invoke, isTauri } = await getTauriApi();
+      
+      // Check if Tauri API is available
+      if (!invoke || !isTauri || !(await isTauri())) {
         return {
           success: false,
           error: 'Command execution is only available in the desktop app.',
@@ -62,7 +76,7 @@ Example:
 
       return {
         success: true,
-        result,
+        result: result as string,
       };
     } catch (error) {
       // Update progress status

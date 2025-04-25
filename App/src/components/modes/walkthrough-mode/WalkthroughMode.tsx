@@ -229,38 +229,70 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
       let statusNotes: string[] = [];
 
       try {
-        // In a test environment, we'll mock this
-        if (typeof window !== 'undefined' && 'Tauri' in window) {
-          // Fetch CWD
-          try {
-            // @ts-expect-error - Tauri invoke is available at runtime
-            const fetchedCwd = await window.__TAURI__.invoke('get_cwd');
+        // Check if we're in a browser environment
+        if (typeof window === 'undefined') {
+          // Handle server-side rendering case
+          setSystemInfo({ error: 'Server-side rendering context.' });
+          setSettingsError('Server-side rendering context. Cannot load settings.');
+          statusNotes.push('App features unavailable during server rendering.');
+          setIsFetchingSysInfo(false);
+          setIsFetchingSettings(false);
+          return;
+        }
+
+        // Safely check for Tauri
+        const tauriAvailable = 'Tauri' in window;
+        if (!tauriAvailable) {
+          // Handle non-Tauri environment
+          console.warn("Tauri API not available.");
+          setSystemInfo({ error: 'Tauri context not found.' });
+          setSettingsError('Tauri context not found. Cannot load settings.');
+          statusNotes.push('Tauri features unavailable.');
+          setIsFetchingSysInfo(false);
+          setIsFetchingSettings(false);
+          return;
+        }
+
+        // Use a safer approach to check for Tauri API
+        const tauriApi = window as any;
+        
+        // Fetch CWD
+        try {
+          if (tauriApi.__TAURI__?.invoke) {
+            const fetchedCwd = await tauriApi.__TAURI__.invoke('get_cwd');
             setCwd(fetchedCwd);
-          } catch (error) {
-            console.error("Failed to fetch CWD:", error);
+          } else {
             setCwd('unknown');
             statusNotes.push('Could not determine current directory.');
           }
+        } catch (error) {
+          console.error("Failed to fetch CWD:", error);
+          setCwd('unknown');
+          statusNotes.push('Could not determine current directory.');
+        }
 
-          // Fetch System Info
-          try {
-            // @ts-expect-error - Tauri invoke is available at runtime
-            const os = await window.__TAURI__.invoke('get_os_info');
-            // @ts-expect-error - Tauri invoke is available at runtime
-            const memory = await window.__TAURI__.invoke('get_memory_info');
+        // Fetch System Info
+        try {
+          if (tauriApi.__TAURI__?.invoke) {
+            const os = await tauriApi.__TAURI__.invoke('get_os_info');
+            const memory = await tauriApi.__TAURI__.invoke('get_memory_info');
             setSystemInfo({ os, memory });
-          } catch (error) {
-            console.error("Failed to fetch system info:", error);
+          } else {
             sysInfoError = 'Could not load system information via Tauri.';
             setSystemInfo({ error: sysInfoError });
-          } finally {
-            setIsFetchingSysInfo(false);
           }
+        } catch (error) {
+          console.error("Failed to fetch system info:", error);
+          sysInfoError = 'Could not load system information via Tauri.';
+          setSystemInfo({ error: sysInfoError });
+        } finally {
+          setIsFetchingSysInfo(false);
+        }
 
-          // Fetch Settings
-          try {
-            // @ts-expect-error - Tauri invoke is available at runtime
-            const loadedSettings = await window.__TAURI__.invoke('get_settings');
+        // Fetch Settings
+        try {
+          if (tauriApi.__TAURI__?.invoke) {
+            const loadedSettings = await tauriApi.__TAURI__.invoke('get_settings');
             setAppSettings(loadedSettings);
             // Check for missing keys relevant to this mode
             if (!loadedSettings[`${loadedSettings.walkthrough_provider}_api_key` as keyof AppSettings]) {
@@ -271,21 +303,16 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
               statusNotes.push('Some API keys are missing. Please configure in Settings.');
               // Don't set settingsError here if the selected provider key exists
             }
-          } catch (err) {
-            console.error("Failed to load settings:", err);
-            const errorMsg = `Failed to load settings via Tauri: ${err instanceof Error ? err.message : String(err)}`;
-            setSettingsError(errorMsg);
+          } else {
+            setSettingsError('Tauri API not available. Cannot load settings.');
             statusNotes.push('Could not load API settings via Tauri.');
-          } finally {
-            setIsFetchingSettings(false);
           }
-        } else {
-          // Handle non-Tauri environment
-          console.warn("Tauri API not available.");
-          setSystemInfo({ error: 'Tauri context not found.' });
-          setSettingsError('Tauri context not found. Cannot load settings.');
-          statusNotes.push('Tauri features unavailable.');
-          setIsFetchingSysInfo(false);
+        } catch (err) {
+          console.error("Failed to load settings:", err);
+          const errorMsg = `Failed to load settings via Tauri: ${err instanceof Error ? err.message : String(err)}`;
+          setSettingsError(errorMsg);
+          statusNotes.push('Could not load API settings via Tauri.');
+        } finally {
           setIsFetchingSettings(false);
         }
       } catch (error) {
@@ -309,7 +336,7 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
     // Debounce or delay fetch slightly? For now, run directly.
     fetchInitialData();
 
-  }, [internalChatId, activeChatId, onMessagesUpdate]); // Rerun when internalChatId changes
+  }, [internalChatId, activeChatId, initialMessages.length, onMessagesUpdate]); // Rerun when internalChatId changes
 
   // Scroll to bottom when messages change
   useEffect(() => {
