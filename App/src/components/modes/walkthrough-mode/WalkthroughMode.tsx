@@ -5,11 +5,14 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { motion } from 'framer-motion';
-import { invoke, isTauri } from '@tauri-apps/api/core';
 import { Send } from 'lucide-react';
 import { techSupportPrompt } from '../../../prompts/tech-support';
 import { getSystemInfoPrompt } from '../../../prompts/system-info';
 import { saveChat, generateChatId, SavedChat } from '../../../lib/chat-storage';
+import { ToolApproval } from '@/components/ui/tool-approval';
+import { ToolUse, ToolResponse, ToolProgressStatus } from '@/prompts/tools/types';
+import { parseToolUse, containsToolUse, extractTextAroundToolUse } from '@/prompts/tools/tool-parser';
+import { executeTool } from '@/prompts/tools';
 
 // Define ApiProvider type locally
 export type ApiProvider = 'openai' | 'claude' | 'openrouter';
@@ -37,14 +40,19 @@ interface AppSettings {
     openai_api_key: string;
     claude_api_key: string;
     open_router_api_key: string;
+    brave_search_api_key: string;
     walkthrough_provider: ApiProvider;
-    // Add other settings fields if they exist in Rust struct (e.g., brave_search_api_key, models, theme)
-    // Ensure this matches the type returned by get_settings in Rust
+    walkthrough_model: string;
+    action_provider: ApiProvider;
+    action_model: string;
+    auto_approve_tools: boolean;
+    theme: string;
 }
 
 export interface ChatMessage {
   sender: 'user' | 'ai';
   content: string;
+  toolUse?: ToolUse; // For tool-related messages
 }
 
 // Props definition
@@ -54,13 +62,37 @@ interface WalkthroughModeProps {
   onMessagesUpdate: (messages: ChatMessage[], chatId: string) => void; // Callback when messages change
 }
 
+// Walkthrough mode system prompt with web search tool
+const WALKTHROUGH_MODE_PROMPT = `
+You are a helpful AI assistant that provides technical support and guidance.
+You can help users troubleshoot issues, explain concepts, and provide step-by-step instructions.
+
+You have access to the following tools:
+
+## web_search
+Description: Search the web using Brave Search API
+Parameters:
+- query: (required) The search query
+- limit: (optional) Maximum number of results to return (default: 5)
+
+Example:
+<web_search>
+<query>latest AI developments</query>
+<limit>3</limit>
+</web_search>
+
+When you need to use a tool, format your response using the XML-style tags shown in the examples above.
+Wait for the result of the tool execution before proceeding with further actions.
+`;
+
 // --- Actual LLM API Call Implementation (remains the same) ---
 async function callLlmApi(
     messages: ChatMessage[],
     systemPrompt: string,
     provider: ApiProvider,
-    apiKey: string | undefined
-): Promise<string> {
+    apiKey: string | undefined,
+    toolUseHandler?: (toolUse: ToolUse) => Promise<ToolResponse>
+): Promise<string | { content: string; toolUse: ToolUse }> {
   console.log(`Calling LLM API for provider: ${provider}...`);
 
   if (!apiKey) {
@@ -140,6 +172,15 @@ async function callLlmApi(
         return "Error: Received an unexpected response format from the AI.";
     }
 
+    // Check if the response contains a tool use
+    if (containsToolUse(aiContent) && toolUseHandler) {
+      const toolUse = parseToolUse(aiContent);
+      if (toolUse) {
+        const { before } = extractTextAroundToolUse(aiContent);
+        return { content: before || aiContent, toolUse };
+      }
+    }
+
     return aiContent.trim();
 
   } catch (error) {
@@ -148,7 +189,6 @@ async function callLlmApi(
   }
 }
 // --- End LLM API Call Implementation ---
-
 
 export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdate }: WalkthroughModeProps) {
   // Internal state for this component
@@ -161,6 +201,8 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [cwd, setCwd] = useState<string | null>(null);
   const [internalChatId, setInternalChatId] = useState<string | null>(null); // Tracks the ID for the current session
+  const [pendingToolUse, setPendingToolUse] = useState<ToolUse | null>(null);
+  const [toolProgress, setToolProgress] = useState<ToolProgressStatus | null>(null);
 
   const viewportRef = useRef<HTMLDivElement>(null);
 
@@ -186,57 +228,68 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
       let sysInfoError: string | undefined;
       let statusNotes: string[] = [];
 
-      if (await isTauri()) {
-        // Fetch CWD
-        try {
-          const fetchedCwd = await invoke<string>('get_cwd');
-          setCwd(fetchedCwd);
-        } catch (error) {
-          console.error("Failed to fetch CWD via invoke:", error);
-          setCwd('unknown');
-          statusNotes.push('Could not determine current directory.');
-        }
-
-        // Fetch System Info
-        try {
-          const os = await invoke<OsInfo>('get_os_info');
-          const memory = await invoke<MemoryInfo>('get_memory_info');
-          setSystemInfo({ os, memory });
-        } catch (error) {
-          console.error("Failed to fetch system info via invoke:", error);
-          sysInfoError = 'Could not load system information via Tauri.';
-          setSystemInfo({ error: sysInfoError });
-        } finally {
-          setIsFetchingSysInfo(false);
-        }
-
-        // Fetch Settings
-        try {
-          const loadedSettings = await invoke<AppSettings>('get_settings');
-          setAppSettings(loadedSettings);
-          // Check for missing keys relevant to this mode
-          if (!loadedSettings[`${loadedSettings.walkthrough_provider}_api_key` as keyof AppSettings]) {
-             statusNotes.push(`API key for ${loadedSettings.walkthrough_provider} is missing. Please check Settings.`);
-             setSettingsError(`API key for ${loadedSettings.walkthrough_provider} is missing.`);
-          } else if (!loadedSettings.openai_api_key && !loadedSettings.claude_api_key && !loadedSettings.open_router_api_key) {
-             // Less critical if the selected provider *has* a key, but good to note
-             statusNotes.push('Some API keys are missing. Please configure in Settings.');
-             // Don't set settingsError here if the selected provider key exists
+      try {
+        // In a test environment, we'll mock this
+        if (typeof window !== 'undefined' && 'Tauri' in window) {
+          // Fetch CWD
+          try {
+            // @ts-expect-error - Tauri invoke is available at runtime
+            const fetchedCwd = await window.__TAURI__.invoke('get_cwd');
+            setCwd(fetchedCwd);
+          } catch (error) {
+            console.error("Failed to fetch CWD:", error);
+            setCwd('unknown');
+            statusNotes.push('Could not determine current directory.');
           }
-        } catch (err) {
-          console.error("Failed to load settings via invoke:", err);
-          const errorMsg = `Failed to load settings via Tauri: ${err instanceof Error ? err.message : String(err)}`;
-          setSettingsError(errorMsg);
-          statusNotes.push('Could not load API settings via Tauri.');
-        } finally {
+
+          // Fetch System Info
+          try {
+            // @ts-expect-error - Tauri invoke is available at runtime
+            const os = await window.__TAURI__.invoke('get_os_info');
+            // @ts-expect-error - Tauri invoke is available at runtime
+            const memory = await window.__TAURI__.invoke('get_memory_info');
+            setSystemInfo({ os, memory });
+          } catch (error) {
+            console.error("Failed to fetch system info:", error);
+            sysInfoError = 'Could not load system information via Tauri.';
+            setSystemInfo({ error: sysInfoError });
+          } finally {
+            setIsFetchingSysInfo(false);
+          }
+
+          // Fetch Settings
+          try {
+            // @ts-expect-error - Tauri invoke is available at runtime
+            const loadedSettings = await window.__TAURI__.invoke('get_settings');
+            setAppSettings(loadedSettings);
+            // Check for missing keys relevant to this mode
+            if (!loadedSettings[`${loadedSettings.walkthrough_provider}_api_key` as keyof AppSettings]) {
+              statusNotes.push(`API key for ${loadedSettings.walkthrough_provider} is missing. Please check Settings.`);
+              setSettingsError(`API key for ${loadedSettings.walkthrough_provider} is missing.`);
+            } else if (!loadedSettings.openai_api_key && !loadedSettings.claude_api_key && !loadedSettings.open_router_api_key) {
+              // Less critical if the selected provider *has* a key, but good to note
+              statusNotes.push('Some API keys are missing. Please configure in Settings.');
+              // Don't set settingsError here if the selected provider key exists
+            }
+          } catch (err) {
+            console.error("Failed to load settings:", err);
+            const errorMsg = `Failed to load settings via Tauri: ${err instanceof Error ? err.message : String(err)}`;
+            setSettingsError(errorMsg);
+            statusNotes.push('Could not load API settings via Tauri.');
+          } finally {
+            setIsFetchingSettings(false);
+          }
+        } else {
+          // Handle non-Tauri environment
+          console.warn("Tauri API not available.");
+          setSystemInfo({ error: 'Tauri context not found.' });
+          setSettingsError('Tauri context not found. Cannot load settings.');
+          statusNotes.push('Tauri features unavailable.');
+          setIsFetchingSysInfo(false);
           setIsFetchingSettings(false);
         }
-      } else {
-        // Handle non-Tauri environment
-        console.warn("Tauri API not available.");
-        setSystemInfo({ error: 'Tauri context not found.' });
-        setSettingsError('Tauri context not found. Cannot load settings.');
-        statusNotes.push('Tauri features unavailable.');
+      } catch (error) {
+        console.error("Error in fetchInitialData:", error);
         setIsFetchingSysInfo(false);
         setIsFetchingSettings(false);
       }
@@ -269,6 +322,156 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
     }
   }, [initialMessages]); // Depend on initialMessages prop from parent
 
+  // Handle tool approval
+  const handleToolApproval = async (approved: boolean) => {
+    if (!pendingToolUse || !internalChatId || !appSettings) return;
+    
+    const toolUse = pendingToolUse;
+    setPendingToolUse(null);
+    
+    if (!approved) {
+      // Add rejection message
+      const rejectionMessage: ChatMessage = { 
+        sender: 'ai', 
+        content: 'Tool use rejected by user.' 
+      };
+      onMessagesUpdate([...initialMessages, rejectionMessage], internalChatId);
+      setIsLoading(false);
+      return;
+    }
+    
+    // Execute the tool
+    await executeToolAndUpdateMessages(toolUse);
+  };
+
+  // Execute a tool and update messages with the result
+  const executeToolAndUpdateMessages = async (toolUse: ToolUse) => {
+    if (!internalChatId || !appSettings) return;
+    
+    setToolProgress({
+      status: 'running',
+      message: `Executing ${toolUse.name} tool...`,
+    });
+    
+    try {
+      // Execute the tool
+      const result = await executeTool(toolUse, (status) => {
+        setToolProgress(status);
+      });
+      
+      // Add tool response message
+      const toolResponseMessage: ChatMessage = { 
+        sender: 'ai', 
+        content: result.success 
+          ? result.result || 'Tool executed successfully.' 
+          : `Error: ${result.error || 'Unknown error'}`
+      };
+      
+      const updatedMessages = [...initialMessages, toolResponseMessage];
+      onMessagesUpdate(updatedMessages, internalChatId);
+      
+      // Continue with AI response after tool execution
+      await continueConversation(updatedMessages);
+    } catch (error) {
+      // Add error message
+      const errorMessage: ChatMessage = { 
+        sender: 'ai', 
+        content: `Error executing tool: ${error instanceof Error ? error.message : String(error)}` 
+      };
+      onMessagesUpdate([...initialMessages, errorMessage], internalChatId);
+      setIsLoading(false);
+    } finally {
+      setToolProgress(null);
+    }
+  };
+
+  // Continue the conversation with the AI after a tool execution
+  const continueConversation = async (currentMessages: ChatMessage[]) => {
+    if (!internalChatId || !appSettings) return;
+    
+    setIsLoading(true);
+    
+    // Construct system prompt
+    const systemInfoDetails = getSystemInfoPrompt(cwd || 'unknown', 'walkthrough', undefined);
+    const finalSystemPrompt = `${WALKTHROUGH_MODE_PROMPT}\n\n${techSupportPrompt}\n\n${systemInfoDetails}`;
+    
+    // Get API key
+    const provider = appSettings.walkthrough_provider;
+    let apiKey: string | undefined;
+    switch (provider) {
+        case 'openai': apiKey = appSettings.openai_api_key; break;
+        case 'claude': apiKey = appSettings.claude_api_key; break;
+        case 'openrouter': apiKey = appSettings.open_router_api_key; break;
+        default: apiKey = undefined;
+    }
+    
+    if (!apiKey) {
+        const errorMsg = `API key for selected provider (${provider}) is missing. Please check Settings.`;
+        const errorAiMessage: ChatMessage = { sender: 'ai', content: errorMsg };
+        onMessagesUpdate([...currentMessages, errorAiMessage], internalChatId);
+        setIsLoading(false);
+        return;
+    }
+    
+    try {
+      // Pass the messages to the API with tool use handler
+      const aiResponse = await callLlmApi(
+        currentMessages, 
+        finalSystemPrompt, 
+        provider, 
+        apiKey,
+        async (toolUse) => {
+          // This is called when the AI wants to use a tool
+          if (appSettings.auto_approve_tools) {
+            // Auto-approve the tool use
+            return await executeTool(toolUse);
+          } else {
+            // Request approval
+            setPendingToolUse(toolUse);
+            // Return a placeholder response
+            return {
+              success: false,
+              error: 'Waiting for user approval',
+            };
+          }
+        }
+      );
+      
+      if (typeof aiResponse === 'string') {
+        // Regular text response
+        const newAiMessage: ChatMessage = { sender: 'ai', content: aiResponse };
+        onMessagesUpdate([...currentMessages, newAiMessage], internalChatId);
+        setIsLoading(false);
+      } else {
+        // Tool use response
+        const { content, toolUse } = aiResponse;
+        
+        // Add AI's explanation before the tool use
+        if (content) {
+          const explanationMessage: ChatMessage = { sender: 'ai', content };
+          onMessagesUpdate([...currentMessages, explanationMessage], internalChatId);
+        }
+        
+        // Handle the tool use
+        if (appSettings.auto_approve_tools) {
+          // Auto-approve the tool use
+          await executeToolAndUpdateMessages(toolUse);
+        } else {
+          // Request approval
+          setPendingToolUse(toolUse);
+        }
+      }
+    } catch (error) {
+      console.error("LLM API call failed in continueConversation:", error);
+      const errorAiMessage: ChatMessage = { 
+        sender: 'ai', 
+        content: `Sorry, I encountered an error trying to respond. (${error instanceof Error ? error.message : String(error)})` 
+      };
+      onMessagesUpdate([...currentMessages, errorAiMessage], internalChatId);
+      setIsLoading(false);
+    }
+  };
+
   // Handle sending a message
   const handleSendMessage = useCallback(async () => {
     if (!userInput.trim() || isLoading || !internalChatId || !appSettings) {
@@ -291,52 +494,18 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
     setUserInput('');
     setIsLoading(true);
 
-    // Construct system prompt
-    const systemInfoDetails = getSystemInfoPrompt(cwd || 'unknown', 'walkthrough', undefined); // Pass mode slug 'walkthrough'
-    const finalSystemPrompt = `${techSupportPrompt}\n\n${systemInfoDetails}`;
-
-    // Get API key
-    const provider = appSettings.walkthrough_provider;
-    let apiKey: string | undefined;
-    switch (provider) {
-        case 'openai': apiKey = appSettings.openai_api_key; break;
-        case 'claude': apiKey = appSettings.claude_api_key; break;
-        case 'openrouter': apiKey = appSettings.open_router_api_key; break;
-        default: apiKey = undefined;
-    }
-
-    if (!apiKey) {
-        const errorMsg = `API key for selected provider (${provider}) is missing. Please check Settings.`;
-        const errorAiMessage: ChatMessage = { sender: 'ai', content: errorMsg };
-        onMessagesUpdate([...updatedMessages, errorAiMessage], internalChatId);
-        setIsLoading(false);
-        return;
-    }
-
-    try {
-      // Pass the messages including the user's latest to the API
-      const aiResponseContent = await callLlmApi(updatedMessages, finalSystemPrompt, provider, apiKey);
-      const newAiMessage: ChatMessage = { sender: 'ai', content: aiResponseContent };
-      // Update parent state with AI response
-      onMessagesUpdate([...updatedMessages, newAiMessage], internalChatId);
-    } catch (error) {
-      console.error("LLM API call failed in handleSendMessage:", error);
-      const errorAiMessage: ChatMessage = { sender: 'ai', content: `Sorry, I encountered an error trying to respond. (${error instanceof Error ? error.message : String(error)})` };
-      // Update parent state with error message
-      onMessagesUpdate([...updatedMessages, errorAiMessage], internalChatId);
-    } finally {
-      setIsLoading(false);
-    }
+    // Continue the conversation with the AI
+    await continueConversation(updatedMessages);
   }, [
     userInput,
     isLoading,
     internalChatId,
     appSettings,
     settingsError,
-    initialMessages, // Use prop for current messages base
-    onMessagesUpdate, // Callback to parent
+    initialMessages,
+    onMessagesUpdate,
     cwd,
-    isFetchingSettings // Include to prevent sending while fetching
+    isFetchingSettings
   ]);
 
   // Render the component
@@ -376,7 +545,7 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
               </motion.div>
             </div>
           ))}
-           {isLoading && (
+           {isLoading && !toolProgress && (
              <div className="flex justify-start">
                 <motion.div
                   initial={{ opacity: 0, y: 10 }}
@@ -388,8 +557,41 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
                 </motion.div>
              </div>
            )}
+           {toolProgress && (
+             <div className="flex justify-start">
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3 }}
+                  className="max-w-[80%] p-3 rounded-lg bg-blue-100 dark:bg-blue-900/50 text-blue-900 dark:text-blue-200"
+                >
+                  <div className="flex items-center">
+                    <div className="mr-2 h-4 w-4 rounded-full bg-blue-500 animate-pulse"></div>
+                    <p>{toolProgress.message || 'Executing tool...'}</p>
+                  </div>
+                  {toolProgress.progress !== undefined && (
+                    <div className="w-full bg-gray-200 rounded-full h-2.5 mt-2">
+                      <div 
+                        className="bg-blue-600 h-2.5 rounded-full" 
+                        style={{ width: `${toolProgress.progress}%` }}
+                      ></div>
+                    </div>
+                  )}
+                </motion.div>
+             </div>
+           )}
         </div>
       </ScrollArea>
+
+      {/* Tool Approval Dialog */}
+      {pendingToolUse && (
+        <ToolApproval
+          toolUse={pendingToolUse}
+          onApprove={() => handleToolApproval(true)}
+          onReject={() => handleToolApproval(false)}
+          isOpen={!!pendingToolUse}
+        />
+      )}
 
       {/* Input Bar */}
       <div className="flex space-x-2 items-center border-t pt-4">

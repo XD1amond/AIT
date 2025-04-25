@@ -28,6 +28,8 @@ interface AppSettings {
     walkthrough_model: string; // Store the specific model string
     action_provider: ApiProvider;
     action_model: string;
+    // Tool settings
+    auto_approve_tools: boolean; // Added for tool auto-approval
     // Appearance settings
     theme: Theme;
 }
@@ -56,6 +58,9 @@ export default function SettingsPage() {
   const [walkthroughModel, setWalkthroughModel] = useState<string>(PROVIDER_MODELS.openai[0]); // Default to first model of default provider
   const [actionProvider, setActionProvider] = useState<ApiProvider>('openai');
   const [actionModel, setActionModel] = useState<string>(PROVIDER_MODELS.openai[0]);
+
+  // State for Tool Settings
+  const [autoApproveTools, setAutoApproveTools] = useState(false);
 
   // State for Appearance Tab
   const [theme, setTheme] = useState<Theme>('system');
@@ -90,6 +95,9 @@ export default function SettingsPage() {
           setActionProvider(actProvider);
           setActionModel(loadedSettings.action_model || PROVIDER_MODELS[actProvider][0]);
 
+          // Load Tool settings
+          setAutoApproveTools(loadedSettings.auto_approve_tools || false);
+
           // Load Appearance settings
           setTheme(loadedSettings.theme || 'system');
 
@@ -106,6 +114,7 @@ export default function SettingsPage() {
           setWalkthroughModel(PROVIDER_MODELS.openai[0]);
           setActionProvider('openai');
           setActionModel(PROVIDER_MODELS.openai[0]);
+          setAutoApproveTools(false);
           setTheme('system');
         } finally {
           setIsLoading(false);
@@ -123,6 +132,7 @@ export default function SettingsPage() {
         setWalkthroughModel(PROVIDER_MODELS.openai[0]);
         setActionProvider('openai');
         setActionModel(PROVIDER_MODELS.openai[0]);
+        setAutoApproveTools(false);
         setTheme('system');
         setIsLoading(false);
     }
@@ -156,6 +166,8 @@ export default function SettingsPage() {
       walkthrough_model: walkthroughModel,
       action_provider: actionProvider,
       action_model: actionModel,
+      // Tool settings
+      auto_approve_tools: autoApproveTools,
       // Appearance
       theme: theme,
     };
@@ -202,9 +214,10 @@ export default function SettingsPage() {
        {/* Main Settings Area */}
        <main className="flex-1 overflow-y-auto p-6">
          <Tabs defaultValue="api-keys" className="w-full max-w-3xl mx-auto">
-           <TabsList className="grid w-full grid-cols-3 mb-6">
+           <TabsList className="grid w-full grid-cols-4 mb-6">
              <TabsTrigger value="api-keys">API Keys</TabsTrigger>
              <TabsTrigger value="models">Models</TabsTrigger>
+             <TabsTrigger value="tools">Tools</TabsTrigger>
              <TabsTrigger value="appearance">Appearance</TabsTrigger>
            </TabsList>
 
@@ -398,6 +411,40 @@ export default function SettingsPage() {
                    </div>
                  </div>
 
+               </CardContent>
+             </Card>
+           </TabsContent>
+
+           {/* Tools Tab */}
+           <TabsContent value="tools">
+             <Card>
+               <CardHeader>
+                 <CardTitle>Tool Settings</CardTitle>
+                 <CardDescription>
+                   Configure how AI tools are used in the application.
+                 </CardDescription>
+               </CardHeader>
+               <CardContent className="space-y-6">
+                 <div className="space-y-3">
+                   <Label className="text-base font-medium">Tool Approval</Label>
+                   <div className="flex items-center space-x-2">
+                     <input
+                       type="checkbox"
+                       id="auto-approve"
+                       checked={autoApproveTools}
+                       onChange={(e) => setAutoApproveTools(e.target.checked)}
+                       disabled={isLoading}
+                       className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                     />
+                     <Label htmlFor="auto-approve" className="text-sm font-normal">
+                       Auto-approve tool usage (skip confirmation dialogs)
+                     </Label>
+                   </div>
+                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                     When enabled, the AI can use tools without asking for your approval each time.
+                     This is convenient but less secure. Only enable this if you trust the AI.
+                   </p>
+                 </div>
                </CardContent>
              </Card>
            </TabsContent>
