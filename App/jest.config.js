@@ -13,9 +13,14 @@ const customJestConfig = {
     // Handle module aliases (if you have them in tsconfig.json)
     '^@/components/(.*)$': '<rootDir>/src/components/$1',
     '^@/lib/(.*)$': '<rootDir>/src/lib/$1',
+    '^@/prompts/system-info$': '<rootDir>/src/__mocks__/system-info.ts',
+    '^@/shared/(.*)$': '<rootDir>/src/shared/$1',
+    '^@/utils/(.*)$': '<rootDir>/src/utils/$1',
     // Mock Tauri API modules
     '^@tauri-apps/api/core$': '<rootDir>/__mocks__/tauriApiCore.js',
     '^@tauri-apps/api/path$': '<rootDir>/__mocks__/tauriApiPath.js', // Example if needed later
+    // Mock os-name module
+    'os-name': '<rootDir>/__mocks__/os-name.js',
     // Add other Tauri mocks as needed
   },
   testPathIgnorePatterns: ['<rootDir>/.next/', '<rootDir>/node_modules/', '<rootDir>/src-tauri/'], // Ignore these directories

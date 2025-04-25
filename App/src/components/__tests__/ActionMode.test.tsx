@@ -7,17 +7,14 @@ describe('ActionMode Component', () => {
   test('renders placeholder content', () => {
     render(<ActionMode />);
 
-    // Check for the title text within the card header
-    expect(screen.getByText('Action Mode')).toBeInTheDocument(); // Check text directly
+    // Check for the title text (now in sr-only element)
+    expect(screen.getByText('Action Mode')).toBeInTheDocument();
 
-    // Check for the updated descriptive text
-    expect(screen.getByText(/enter the computer problem or task/i)).toBeInTheDocument();
+    // Check for the input placeholder
+    expect(screen.getByPlaceholderText('Type your problem...')).toBeInTheDocument();
 
-    // Check for the updated placeholder text
-    expect(screen.getByPlaceholderText(/e\.g\., change my wallpaper, clear browser cache/i)).toBeInTheDocument();
-
-    // Check for the button with the text "Go"
-    expect(screen.getByRole('button', { name: /go/i })).toBeInTheDocument();
+    // Check for the submit button
+    expect(screen.getByRole('button', { name: /submit task/i })).toBeInTheDocument();
   });
 
   // Add more tests here later when Action Mode functionality is implemented

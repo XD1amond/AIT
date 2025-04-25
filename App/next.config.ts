@@ -5,8 +5,22 @@ const nextConfig: NextConfig = {
   images: {
     unoptimized: true, // Often needed with static exports
   },
-  // Keep this comment or remove if no other options are needed
-  /* config options here */
+  // Configure webpack to handle Node.js modules in browser environment
+  webpack: (config, { isServer }) => {
+    // If it's a client-side build (browser)
+    if (!isServer) {
+      // Replace Node.js modules with empty modules
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        fs: false,
+        child_process: false,
+        os: false,
+        path: false,
+        crypto: false,
+      };
+    }
+    return config;
+  },
 };
 
 export default nextConfig;

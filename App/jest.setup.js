@@ -10,3 +10,8 @@ global.ResizeObserver = jest.fn().mockImplementation(() => ({
     unobserve: jest.fn(),
     disconnect: jest.fn(),
 }));
+
+// Add missing hasPointerCapture method to Element prototype for Radix UI components
+if (!Element.prototype.hasPointerCapture) {
+    Element.prototype.hasPointerCapture = jest.fn(() => false);
+}

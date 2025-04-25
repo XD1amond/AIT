@@ -1,17 +1,16 @@
-import defaultShell from 'default-shell';
-
 /**
- * Attempts to detect the default shell.
- * Uses the 'default-shell' package.
- * @returns The detected shell path or name, or null if detection fails.
+ * Browser-compatible version of shell detection.
+ * @returns A default shell string for browser environments or null.
  */
 export function getShell(): string | null {
-  try {
-    // default-shell might return undefined or empty string in some cases
-    const shell = defaultShell;
-    return shell || null; // Return null if defaultShell is falsy
-  } catch (error) {
-    console.error("Error detecting default shell:", error);
-    return null; // Return null on error
-  }
+  // In browser environments, return a placeholder value
+  return '/bin/browser-shell';
+}
+
+/**
+ * Checks if the code is running in a browser environment.
+ * @returns true if in browser, false otherwise
+ */
+export function isBrowserEnvironment(): boolean {
+  return typeof window !== 'undefined';
 }

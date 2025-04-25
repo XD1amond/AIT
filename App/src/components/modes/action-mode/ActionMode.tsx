@@ -74,7 +74,8 @@ export function ActionMode() {
       // Consistent padding and structure with WalkthroughMode
       className="flex flex-col h-full w-full p-4" // Removed max-w-3xl mx-auto
     >
-      {/* Removed Description Text */}
+      {/* Add a visually hidden heading for accessibility and testing */}
+      <h2 className="sr-only">Action Mode</h2>
 
       {/* Message Area using ScrollArea */}
       <ScrollArea className="flex-grow mb-4 pr-4 -mr-4">

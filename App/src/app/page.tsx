@@ -7,11 +7,12 @@ import { WalkthroughMode, ChatMessage } from '@/components/modes/walkthrough-mod
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Settings, PlusCircle, Filter, SortAsc, SortDesc } from 'lucide-react'; // Added icons
+import { Settings, PlusCircle, Filter, SortAsc, SortDesc, Search, Trash2 } from 'lucide-react'; // Added Search and Trash2 icons
 import { Button } from '@/components/ui/button';
 import Link from 'next/link';
-import { getAllSavedChats, saveChat, SavedChat } from '@/lib/chat-storage';
+import { getAllSavedChats, saveChat, deleteChat, SavedChat } from '@/lib/chat-storage';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"; // Added Select imports
+import { Input } from "@/components/ui/input";
 
 // Define the modes available in the chat interface
 type Mode = 'action' | 'walkthrough';
@@ -29,6 +30,7 @@ export default function Home() {
   const [activeChatMessages, setActiveChatMessages] = useState<ChatMessage[]>([]);
   const [filterMode, setFilterMode] = useState<'all' | 'action' | 'walkthrough'>('all'); // Filter state
   const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest'); // Sort state
+  const [searchQuery, setSearchQuery] = useState<string>(''); // Search state
 
   // Load chats on initial mount
   useEffect(() => {
@@ -74,6 +76,27 @@ export default function Home() {
     }
   }, [activeChatId]);
 
+  // Function to handle deleting a chat
+  const handleDeleteChat = useCallback((e: React.MouseEvent, chatId: string) => {
+    e.stopPropagation(); // Prevent triggering the chat selection
+    deleteChat(chatId)
+      .then(() => {
+        setSavedChats(prevChats => prevChats.filter(chat => chat.id !== chatId));
+        
+        // If the deleted chat was active, select another chat or clear the active chat
+        if (chatId === activeChatId) {
+          const remainingChats = savedChats.filter(chat => chat.id !== chatId);
+          if (remainingChats.length > 0) {
+            handleSelectChat(remainingChats[0].id);
+          } else {
+            setActiveChatId(null);
+            setActiveChatMessages([]);
+          }
+        }
+      })
+      .catch(err => console.error(`Failed to delete chat ${chatId}:`, err));
+  }, [savedChats, activeChatId, handleSelectChat]);
+
   // Callback function for WalkthroughMode to update messages and trigger save
   const handleMessagesUpdate = useCallback((updatedMessages: ChatMessage[], chatId: string) => {
     setActiveChatMessages(updatedMessages);
@@ -106,14 +129,32 @@ export default function Home() {
 
   }, [currentMode, activeChatId]);
 
-  // Memoize the filtered and sorted chat list
+  // Memoize the filtered, sorted, and searched chat list
   const displayedChats = useMemo(() => {
     let chats = [...savedChats];
 
+    // Apply mode filter
     if (filterMode !== 'all') {
       chats = chats.filter(chat => chat.mode === filterMode);
     }
 
+    // Apply search filter if search query exists
+    if (searchQuery.trim() !== '') {
+      const query = searchQuery.toLowerCase();
+      chats = chats.filter(chat => {
+        // Search in title if it exists
+        if (chat.title && chat.title.toLowerCase().includes(query)) {
+          return true;
+        }
+        // Search in first message content
+        if (chat.messages[0]?.content.toLowerCase().includes(query)) {
+          return true;
+        }
+        return false;
+      });
+    }
+
+    // Apply sort
     chats.sort((a, b) => {
       if (sortOrder === 'newest') {
         return b.timestamp - a.timestamp;
@@ -123,7 +164,7 @@ export default function Home() {
     });
 
     return chats;
-  }, [savedChats, filterMode, sortOrder]);
+  }, [savedChats, filterMode, sortOrder, searchQuery]);
 
 
   return (
@@ -140,6 +181,18 @@ export default function Home() {
                 <ScrollArea className="flex-1">
                   {/* Add data-testid for easier selection in tests */}
                   <div data-testid="chat-list" className="p-4 space-y-2">
+                    {/* Search Bar */}
+                    <div className="relative mb-3">
+                      <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+                      <Input
+                        type="text"
+                        placeholder="Search chats..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="pl-8 h-8 text-sm"
+                      />
+                    </div>
+                    
                     {/* Filter and Sort Controls */}
                     <div className="flex justify-between items-center mb-3 gap-2">
                <Select value={filterMode} onValueChange={(value) => setFilterMode(value as any)}>
@@ -174,23 +227,30 @@ export default function Home() {
               </div>
             ) : (
               displayedChats.map((chat) => (
-                <Button
-                  key={chat.id}
-                  variant="ghost"
-                  className={`w-full justify-start text-sm truncate h-auto py-2 ${
-                    chat.id === activeChatId ? 'bg-gray-200 dark:bg-gray-700' : ''
-                  }`}
-                  onClick={() => handleSelectChat(chat.id)}
-                >
-                  <div className="flex flex-col items-start">
-                     <span className="font-medium truncate max-w-[180px]">
+                <div key={chat.id} className="group">
+                  <div className="flex items-center">
+                    <Button
+                      variant="ghost"
+                      className={`w-[calc(100%-24px)] justify-start text-sm h-auto py-2 ${
+                        chat.id === activeChatId ? 'bg-gray-200 dark:bg-gray-700' : ''
+                      }`}
+                      onClick={() => handleSelectChat(chat.id)}
+                    >
+                      <span className="font-medium truncate max-w-[180px]">
                         {chat.title || chat.messages[0]?.content.substring(0, 25) || `Chat ${chat.id.substring(5, 10)}`}
-                     </span>
-                     <span className="text-xs text-gray-500 dark:text-gray-400">
-                        {new Date(chat.timestamp).toLocaleString()} - {chat.mode}
-                     </span>
+                      </span>
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 ml-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                      onClick={(e) => handleDeleteChat(e, chat.id)}
+                      aria-label="Delete chat"
+                    >
+                      <Trash2 className="h-4 w-4 text-gray-500 hover:text-red-500" />
+                    </Button>
                   </div>
-                </Button>
+                </div>
               ))
             )}
           </div>
