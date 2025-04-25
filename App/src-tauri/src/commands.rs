@@ -1,8 +1,9 @@
 use std::process::Command;
 use std::path::Path;
-use std::fs;
+use std::fs::{self, create_dir_all}; // Added create_dir_all
+use std::path::PathBuf; // Added PathBuf
 use std::sync::Mutex;
-use tauri::command;
+use tauri::{command, AppHandle, Manager}; // Added AppHandle, Manager
 use serde::{Deserialize, Serialize};
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE, AUTHORIZATION};
 use once_cell::sync::Lazy;
@@ -168,50 +169,86 @@ fn create_default_settings() -> AppSettings {
     }
 }
 
+// Helper function to get the settings file path
+fn get_settings_path(app_handle: &AppHandle) -> Result<PathBuf, String> {
+    // Use ok_or_else to convert Option<PathBuf> to Result<PathBuf, String>
+    let data_dir = app_handle.path().app_data_dir()
+        .or_else(|_| Err("Failed to get app data directory".to_string()))?;
+    
+    // Ensure the directory exists
+    create_dir_all(&data_dir)
+        .map_err(|e| format!("Failed to create app data directory: {}", e))?;
+        
+    Ok(data_dir.join("settings.json"))
+}
+
 // Get settings
 #[command]
-pub fn get_settings() -> AppSettings {
+pub fn get_settings(app_handle: AppHandle) -> AppSettings {
     // Try to get settings from memory first
     let mut settings_guard = SETTINGS.lock().unwrap();
-    
+
     if let Some(settings) = settings_guard.as_ref() {
         // Return a clone of the settings
+        println!("Returning settings from memory cache.");
         return settings.clone();
     }
-    
+
     // If not in memory, try to load from file
-    let settings_path = "settings.json";
-    let settings = if Path::new(settings_path).exists() {
-        match fs::read_to_string(settings_path) {
+    let settings_path = match get_settings_path(&app_handle) {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("Error getting settings path: {}", e);
+            // Fallback to default if path resolution fails
+            let default_settings = create_default_settings();
+            *settings_guard = Some(default_settings.clone());
+            return default_settings;
+        }
+    };
+
+    println!("Attempting to load settings from: {:?}", settings_path);
+    let settings = if settings_path.exists() {
+        match fs::read_to_string(&settings_path) {
             Ok(json) => match serde_json::from_str::<AppSettings>(&json) {
-                Ok(settings) => settings,
-                Err(_) => create_default_settings(),
+                Ok(loaded_settings) => {
+                    println!("Successfully loaded settings from file.");
+                    loaded_settings
+                },
+                Err(e) => {
+                    eprintln!("Failed to parse settings file: {}. Using defaults.", e);
+                    create_default_settings()
+                },
             },
-            Err(_) => create_default_settings(),
+            Err(e) => {
+                eprintln!("Failed to read settings file: {}. Using defaults.", e);
+                create_default_settings()
+            },
         }
     } else {
+        println!("Settings file not found. Using defaults.");
         create_default_settings()
     };
-    
+
     // Store in memory for future use
     *settings_guard = Some(settings.clone());
-    
+
     settings
 }
 
 // Save settings
 #[command]
-pub fn save_settings(settings: AppSettings) -> Result<(), String> {
+pub fn save_settings(app_handle: AppHandle, settings: AppSettings) -> Result<(), String> {
     // Save to memory
     let mut settings_guard = SETTINGS.lock().unwrap();
     *settings_guard = Some(settings.clone());
-    
+
     // Save to file
-    let settings_path = "settings.json";
+    let settings_path = get_settings_path(&app_handle)?; // Use helper function
+
     match serde_json::to_string_pretty(&settings) {
-        Ok(json) => match fs::write(settings_path, json) {
+        Ok(json) => match fs::write(&settings_path, json) { // Use the full path
             Ok(_) => {
-                println!("Settings saved successfully to {}", settings_path);
+                println!("Settings saved successfully to {:?}", settings_path);
                 Ok(())
             },
             Err(e) => Err(format!("Failed to write settings file: {}", e)),

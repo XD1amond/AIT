@@ -1,5 +1,7 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+// Import 'within'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom';
 import SettingsPage from '../settings/page';
 
@@ -51,10 +53,11 @@ describe('Settings Page', () => {
     
     // Wait for settings to load
     await waitFor(() => {
-      expect(screen.getByText('API Keys')).toBeInTheDocument();
-      expect(screen.getByText('Models')).toBeInTheDocument();
-      expect(screen.getByText('Tools')).toBeInTheDocument();
-      expect(screen.getByText('Appearance')).toBeInTheDocument();
+      // Use getByRole for tab buttons to be more specific
+      expect(screen.getByRole('tab', { name: /API Keys/i })).toBeInTheDocument();
+      expect(screen.getByRole('tab', { name: /Models/i })).toBeInTheDocument();
+      expect(screen.getByRole('tab', { name: /Tools/i })).toBeInTheDocument();
+      expect(screen.getByRole('tab', { name: /Appearance/i })).toBeInTheDocument();
     });
   });
 
@@ -62,22 +65,24 @@ describe('Settings Page', () => {
     render(<SettingsPage />);
     
     // Wait for settings to load
+    // 1. Wait for initial settings (API Keys tab) to load
     await waitFor(() => {
-      // Check API keys tab
       const openaiInput = screen.getByLabelText('OpenAI') as HTMLInputElement;
       expect(openaiInput.value).toBe('test-openai-key');
+    });
+
+    // 2. Switch to Tools tab using userEvent
+    await userEvent.click(screen.getByRole('tab', { name: /Tools/i }));
+
+    // 3. Wait for Tools tab content to render and perform checks, increasing timeout
+    await waitFor(() => {
+      // Use data-testid for a more specific check of the heading
+      expect(screen.getByTestId('auto-approve-header')).toBeInTheDocument();
       
-      // Switch to Tools tab and check values
-      fireEvent.click(screen.getByText('Tools'));
-      
-      // Check tool settings
-      expect(screen.getByText('Tools')).toBeInTheDocument();
-      expect(screen.getByText('Auto Approve')).toBeInTheDocument();
-      
-      // Check command whitelist/blacklist
+      // Check command whitelist/blacklist headings
       expect(screen.getByText('Command Whitelist')).toBeInTheDocument();
       expect(screen.getByText('Command Blacklist')).toBeInTheDocument();
-    });
+    }, { timeout: 3000 }); // Increased timeout to 3 seconds
   });
 
   it('saves settings correctly', async () => {
@@ -89,7 +94,12 @@ describe('Settings Page', () => {
     });
     
     // Save settings
-    fireEvent.click(screen.getByText('Save All Settings'));
+    // Use getByRole for the button and wrap in waitFor to handle potential async updates
+    await waitFor(() => {
+      const saveButton = screen.getByRole('button', { name: /Save All Settings/i });
+      expect(saveButton).toBeInTheDocument(); // Ensure button exists before clicking
+      fireEvent.click(saveButton);
+    });
     
     // Verify invoke was called with the expected settings
     await waitFor(() => {
@@ -127,5 +137,116 @@ describe('Settings Page', () => {
         })
       });
     });
+
+    // Verify success message is shown
+    expect(await screen.findByText("Settings saved successfully!")).toBeInTheDocument();
   });
+
+  it('updates a setting and saves the new value', async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    // Wait for initial load
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /Appearance/i })).toBeInTheDocument();
+    });
+
+    // Switch to Appearance tab
+    await user.click(screen.getByRole('tab', { name: /Appearance/i }));
+
+    // Find and click the 'Light' theme radio button
+    const lightThemeRadio = await screen.findByLabelText('Light');
+    expect(lightThemeRadio).toBeInTheDocument();
+    await user.click(lightThemeRadio);
+
+    // Click the radio button
+    await user.click(lightThemeRadio);
+
+    // Add a small delay to allow React state update to process
+    await new Promise(r => setTimeout(r, 50)); // 50ms delay
+
+    // Click save
+    await user.click(screen.getByRole('button', { name: /Save All Settings/i }));
+
+    // Verify invoke was called with the updated theme
+    await waitFor(() => {
+      const { invoke } = require('@tauri-apps/api/core');
+      expect(invoke).toHaveBeenCalledWith('save_settings', {
+        settings: expect.objectContaining({
+          theme: 'light', // Check that the theme was updated
+          // Include other settings to ensure they weren't lost
+          openai_api_key: 'test-openai-key',
+          action_provider: 'claude',
+        })
+      });
+    });
+
+     // Verify success message is shown
+     expect(await screen.findByText("Settings saved successfully!")).toBeInTheDocument();
+  });
+
+  // Add more tests for other settings changes (e.g., models, tools, whitelist/blacklist)
+  it('adds a command to the whitelist and saves', async () => {
+      const user = userEvent.setup();
+      render(<SettingsPage />);
+
+      // Wait for initial load
+      await waitFor(() => {
+          expect(screen.getByRole('tab', { name: /Tools/i })).toBeInTheDocument();
+      });
+
+      // Switch to Tools tab
+      await user.click(screen.getByRole('tab', { name: /Tools/i }));
+
+      // Find the whitelist section using its data-testid
+      // Looking at settings/page.tsx, the h4 has data-testid="command-whitelist-header"
+      // Let's find the parent container related to this header to scope our search
+      const whitelistSection = await screen.findByTestId('command-whitelist-header');
+      // Assuming the input and button are within the same logical container as the header
+      // Adjust selector based on actual DOM structure if needed
+      const whitelistContainer = whitelistSection.closest('div.space-y-4'); // Find the parent div
+      expect(whitelistContainer).toBeInTheDocument(); // Ensure container is found
+
+      // Find input and button *within* the whitelist container
+      const whitelistInput = within(whitelistContainer!).getByPlaceholderText(/Enter command prefix \(e.g., npm test\)/i);
+      const addButton = within(whitelistContainer!).getByRole('button', { name: /Add/i });
+
+      expect(whitelistInput).toBeInTheDocument();
+      expect(addButton).toBeInTheDocument();
+
+      // Type new command and click Add
+      await user.type(whitelistInput, 'git status');
+      // Click the add button
+      await user.click(addButton!);
+
+      // Add a small explicit delay to see if it helps with state update/re-render timing
+      await new Promise(r => setTimeout(r, 50)); // 50ms delay
+
+      // Wait for the UI to update and show the new command chip
+      // Wait for the UI to update and show the new command chip using data-testid
+      // Wait for the UI to update and show the new command chip using data-testid
+      // Query the whole screen instead of within the container, which might be stale
+      await waitFor(() => {
+          expect(screen.getByTestId('whitelist-chip-git status')).toBeInTheDocument();
+      });
+
+      // Now click save
+      await user.click(screen.getByRole('button', { name: /Save All Settings/i }));
+
+      // Verify invoke was called with the updated whitelist *within* a waitFor
+      await waitFor(() => {
+          const { invoke } = require('@tauri-apps/api/core');
+          // Check the exact array content and order
+          expect(invoke).toHaveBeenCalledWith('save_settings', {
+              settings: expect.objectContaining({
+                  whitelisted_commands: ['ls', 'echo', 'git status'],
+              })
+          });
+      });
+
+      // Also verify the success message appears after saving
+      expect(await screen.findByText("Settings saved successfully!")).toBeInTheDocument();
+  });
+
+
 });

@@ -1,0 +1,30 @@
+{
+  "openai_api_key": "",
+  "claude_api_key": "a",
+  "open_router_api_key": "",
+  "brave_search_api_key": "",
+  "walkthrough_provider": "openai",
+  "walkthrough_model": "gpt-4o",
+  "action_provider": "openai",
+  "action_model": "gpt-4o",
+  "auto_approve_tools": false,
+  "walkthrough_tools": {
+    "command": true,
+    "web_search": true
+  },
+  "action_tools": {
+    "web_search": true,
+    "command": true
+  },
+  "auto_approve_walkthrough": {
+    "web_search": false,
+    "command": false
+  },
+  "auto_approve_action": {
+    "command": false,
+    "web_search": false
+  },
+  "whitelisted_commands": [],
+  "blacklisted_commands": [],
+  "theme": "system"
+}

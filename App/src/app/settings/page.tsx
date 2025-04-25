@@ -671,9 +671,10 @@ export default function SettingsPage() {
                          </Button>
                        </div>
                        
-                       <div className="flex flex-wrap gap-2 mt-2">
+                       <div className="flex flex-wrap gap-2 mt-2" data-testid="whitelist-chips-container">
                          {whitelistedCommands.map((cmd, index) => (
-                           <div key={index} className="bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded-md flex items-center">
+                           // Add data-testid to the chip div itself for easier selection
+                           <div key={index} className="bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded-md flex items-center" data-testid={`whitelist-chip-${cmd}`}>
                              <span className="mr-1">{cmd}</span>
                              <button
                                onClick={() => setWhitelistedCommands(whitelistedCommands.filter((_, i) => i !== index))}

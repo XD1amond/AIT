@@ -56,9 +56,11 @@ interface AppSettings {
 }
 
 export interface ChatMessage {
-  sender: 'user' | 'ai';
-  content: string;
-  toolUse?: ToolUse; // For tool-related messages
+    id: string; // Add ID for better key management and consistency
+    sender: 'user' | 'ai';
+    content: string;
+    toolUse?: ToolUse; // For tool-related messages
+    type?: 'user' | 'ai' | 'error' | 'tool-request' | 'tool-response' | 'status'; // Add type for styling
 }
 
 // Props definition
@@ -332,7 +334,12 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
         if (statusNotes.length > 0) {
           initialContent += `\n\n(Note: ${statusNotes.join(' ')})`;
         }
-        const initialAiMessage: ChatMessage = { sender: 'ai', content: initialContent };
+        const initialAiMessage: ChatMessage = {
+            id: `msg_${Date.now()}_init`, // Add ID
+            sender: 'ai',
+            content: initialContent,
+            type: 'ai' // Add type
+        };
         // Use the callback to update parent state and trigger save
         onMessagesUpdate([initialAiMessage], internalChatId);
       }
@@ -362,14 +369,16 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
     setPendingToolUse(null);
     
     if (!approved) {
-      // Add rejection message
-      const rejectionMessage: ChatMessage = {
-        sender: 'ai',
-        content: 'Tool use rejected by user.'
-      };
-      onMessagesUpdate([...initialMessages, rejectionMessage], internalChatId);
-      setIsLoading(false);
-      return;
+        // Add rejection message
+        const rejectionMessage: ChatMessage = {
+            id: `msg_${Date.now()}_reject`, // Add ID
+            sender: 'ai',
+            content: 'Tool use rejected by user.',
+            type: 'error' // Add type
+        };
+        onMessagesUpdate([...initialMessages, rejectionMessage], internalChatId);
+        setIsLoading(false);
+        return;
     }
     
     // Execute the tool
@@ -401,15 +410,17 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
     });
     
     try {
-      // Check if the tool is enabled for walkthrough mode
-      if (!isToolEnabled(toolUse.name, 'walkthrough', getToolSettings())) {
-        const errorMessage: ChatMessage = {
-          sender: 'ai',
-          content: `Tool '${toolUse.name}' is not enabled for walkthrough mode.`
-        };
-        onMessagesUpdate([...initialMessages, errorMessage], internalChatId);
-        setIsLoading(false);
-        setToolProgress(null);
+        // Check if the tool is enabled for walkthrough mode
+        if (!isToolEnabled(toolUse.name, 'walkthrough', getToolSettings())) {
+            const errorMessage: ChatMessage = {
+                id: `msg_${Date.now()}_tool_disabled`, // Add ID
+                sender: 'ai',
+                content: `Tool '${toolUse.name}' is not enabled for walkthrough mode.`,
+                type: 'error' // Add type
+            };
+            onMessagesUpdate([...initialMessages, errorMessage], internalChatId);
+            setIsLoading(false);
+            setToolProgress(null);
         return;
       }
       
@@ -417,15 +428,17 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
       if (toolUse.name === 'command' && toolUse.params.command && typeof toolUse.params.command === 'string') {
         const command = toolUse.params.command;
         
-        // Check blacklist first (blacklist overrides whitelist)
-        if (isCommandBlacklisted(command, getToolSettings())) {
-          const errorMessage: ChatMessage = {
-            sender: 'ai',
-            content: `Command '${command}' is blacklisted and cannot be executed.`
-          };
-          onMessagesUpdate([...initialMessages, errorMessage], internalChatId);
-          setIsLoading(false);
-          setToolProgress(null);
+            // Check blacklist first (blacklist overrides whitelist)
+            if (isCommandBlacklisted(command, getToolSettings())) {
+                const errorMessage: ChatMessage = {
+                    id: `msg_${Date.now()}_cmd_blacklisted`, // Add ID
+                    sender: 'ai',
+                    content: `Command '${command}' is blacklisted and cannot be executed.`,
+                    type: 'error' // Add type
+                };
+                onMessagesUpdate([...initialMessages, errorMessage], internalChatId);
+                setIsLoading(false);
+                setToolProgress(null);
           return;
         }
       }
@@ -440,27 +453,33 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
         getToolSettings()
       );
       
-      // Add tool response message
-      const toolResponseMessage: ChatMessage = { 
-        sender: 'ai', 
-        content: result.success 
-          ? result.result || 'Tool executed successfully.' 
-          : `Error: ${result.error || 'Unknown error'}`
-      };
-      
-      const updatedMessages = [...initialMessages, toolResponseMessage];
-      onMessagesUpdate(updatedMessages, internalChatId);
+        // Add tool response message
+        const toolResponseMessage: ChatMessage = {
+            id: `msg_${Date.now()}_tool_resp`, // Add ID
+            sender: 'ai',
+            content: result.success
+                ? result.result || 'Tool executed successfully.'
+                : `Error: ${result.error || 'Unknown error'}`,
+            type: result.success ? 'tool-response' : 'error' // Add type based on success
+        };
+
+        const updatedMessages = [...initialMessages, toolResponseMessage];
+        // Don't call onMessagesUpdate yet, wait for AI's final response in continueConversation
+        // onMessagesUpdate(updatedMessages, internalChatId);
       
       // Continue with AI response after tool execution
       await continueConversation(updatedMessages);
     } catch (error) {
-      // Add error message
-      const errorMessage: ChatMessage = { 
-        sender: 'ai', 
-        content: `Error executing tool: ${error instanceof Error ? error.message : String(error)}` 
-      };
-      onMessagesUpdate([...initialMessages, errorMessage], internalChatId);
-      setIsLoading(false);
+        // Add error message
+        const errorContent = `Error executing tool: ${error instanceof Error ? error.message : String(error)}`;
+        const errorMessage: ChatMessage = {
+            id: `msg_${Date.now()}_tool_exec_err`, // Add ID
+            sender: 'ai',
+            content: errorContent,
+            type: 'error' // Add type
+        };
+        onMessagesUpdate([...initialMessages, errorMessage], internalChatId);
+        setIsLoading(false);
     } finally {
       setToolProgress(null);
     }
@@ -488,7 +507,12 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
     
     if (!apiKey) {
         const errorMsg = `API key for selected provider (${provider}) is missing. Please check Settings.`;
-        const errorAiMessage: ChatMessage = { sender: 'ai', content: errorMsg };
+        const errorAiMessage: ChatMessage = {
+            id: `msg_${Date.now()}_api_key_err`, // Add ID
+            sender: 'ai',
+            content: errorMsg,
+            type: 'error' // Add type
+        };
         onMessagesUpdate([...currentMessages, errorAiMessage], internalChatId);
         setIsLoading(false);
         return;
@@ -547,22 +571,46 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
       );
       
       if (typeof aiResponse === 'string') {
-        // Regular text response
-        const newAiMessage: ChatMessage = { sender: 'ai', content: aiResponse };
-        onMessagesUpdate([...currentMessages, newAiMessage], internalChatId);
-        setIsLoading(false);
-      } else {
-        // Tool use response
-        const { content, toolUse } = aiResponse;
-        
-        // Add AI's explanation before the tool use
-        if (content) {
-          const explanationMessage: ChatMessage = { sender: 'ai', content };
-          onMessagesUpdate([...currentMessages, explanationMessage], internalChatId);
-        }
-        
-        // Handle the tool use
-        // Special handling for command tool
+                // Regular text response
+                const newAiMessage: ChatMessage = {
+                    id: `msg_${Date.now()}_ai`, // Add ID
+                    sender: 'ai',
+                    content: aiResponse,
+                    type: 'ai' // Add type
+                };
+                onMessagesUpdate([...currentMessages, newAiMessage], internalChatId);
+                setIsLoading(false);
+            } else {
+                // Tool use response
+                const { content, toolUse } = aiResponse;
+                let intermediateMessages = [...currentMessages];
+
+                // Add AI's explanation before the tool use
+                if (content) {
+                    const explanationMessage: ChatMessage = {
+                        id: `msg_${Date.now()}_tool_pre`, // Add ID
+                        sender: 'ai',
+                        content,
+                        type: 'ai' // Add type
+                    };
+                    intermediateMessages.push(explanationMessage);
+                    // Update UI to show explanation before potential approval dialog
+                    onMessagesUpdate(intermediateMessages, internalChatId);
+                }
+
+                // Add tool request message (for potential approval UI)
+                const toolRequestMessage: ChatMessage = {
+                    id: `msg_${Date.now()}_tool_req`, // Add ID
+                    sender: 'ai', // AI requests the tool
+                    content: `Requesting to use ${toolUse.name} tool`,
+                    type: 'tool-request',
+                    toolUse: toolUse, // Attach toolUse data
+                };
+                intermediateMessages.push(toolRequestMessage);
+                onMessagesUpdate(intermediateMessages, internalChatId); // Show request
+
+                // Handle the tool use
+                // Special handling for command tool
         if (toolUse.name === 'command' && toolUse.params.command && typeof toolUse.params.command === 'string') {
           const command = toolUse.params.command;
           
@@ -582,13 +630,16 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
         }
       }
     } catch (error) {
-      console.error("LLM API call failed in continueConversation:", error);
-      const errorAiMessage: ChatMessage = { 
-        sender: 'ai', 
-        content: `Sorry, I encountered an error trying to respond. (${error instanceof Error ? error.message : String(error)})` 
-      };
-      onMessagesUpdate([...currentMessages, errorAiMessage], internalChatId);
-      setIsLoading(false);
+        console.error("LLM API call failed in continueConversation:", error);
+        const errorContent = `Sorry, I encountered an error trying to respond. (${error instanceof Error ? error.message : String(error)})`;
+        const errorAiMessage: ChatMessage = {
+            id: `msg_${Date.now()}_llm_err`, // Add ID
+            sender: 'ai',
+            content: errorContent,
+            type: 'error' // Add type
+        };
+        onMessagesUpdate([...currentMessages, errorAiMessage], internalChatId);
+        setIsLoading(false);
     }
   };
 
@@ -599,45 +650,39 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
       return;
     }
     
-    // If settings are not loaded, try to load them
-    if (!appSettings && !isFetchingSettings) {
-      try {
-        if (typeof window !== 'undefined' && 'Tauri' in window) {
-          const tauriApi = window as any;
-          if (tauriApi.__TAURI__?.invoke) {
-            const loadedSettings = await tauriApi.__TAURI__.invoke('get_settings');
-            setAppSettings(loadedSettings);
-            setSettingsError(null);
-          }
+    // Remove the attempt to re-fetch settings here. Rely on the initial load.
+    
+        // If settings are not loaded or there's an error, show error message
+        if (!appSettings) {
+            const errorMessage: ChatMessage = {
+                id: `msg_${Date.now()}_settings_err1`, // Add ID
+                sender: 'ai',
+                content: 'Settings not loaded. Please try again.',
+                type: 'error' // Add type
+            };
+            onMessagesUpdate([...initialMessages, errorMessage], internalChatId);
+            return;
         }
-      } catch (error) {
-        console.error("Failed to fetch settings:", error);
-        setSettingsError(`Failed to load settings: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-    
-    // If settings are still not loaded or there's an error, show error message
-    if (!appSettings) {
-      const errorMessage: ChatMessage = {
-        sender: 'ai',
-        content: 'Settings not loaded. Please try again.'
-      };
-      onMessagesUpdate([...initialMessages, errorMessage], internalChatId);
-      return;
-    }
-    
-    if (settingsError) {
-      const errorMessage: ChatMessage = {
-        sender: 'ai',
-        content: `Error with settings: ${settingsError}. Please check your settings.`
-      };
-      onMessagesUpdate([...initialMessages, errorMessage], internalChatId);
-      return;
-    }
 
-    const newUserMessage: ChatMessage = { sender: 'user', content: userInput };
-    const currentMessages = initialMessages; // Get current messages from props
-    const updatedMessages = [...currentMessages, newUserMessage];
+        if (settingsError) {
+            const errorMessage: ChatMessage = {
+                id: `msg_${Date.now()}_settings_err2`, // Add ID
+                sender: 'ai',
+                content: `Error with settings: ${settingsError}. Please check your settings.`,
+                type: 'error' // Add type
+            };
+            onMessagesUpdate([...initialMessages, errorMessage], internalChatId);
+            return;
+        }
+
+        const newUserMessage: ChatMessage = {
+            id: `msg_${Date.now()}_user`, // Add ID
+            sender: 'user',
+            content: userInput,
+            type: 'user' // Add type
+        };
+        const currentMessages = initialMessages; // Get current messages from props
+        const updatedMessages = [...currentMessages, newUserMessage];
 
     // Update parent state immediately with user message
     onMessagesUpdate(updatedMessages, internalChatId);
@@ -674,22 +719,29 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
           {/* Render messages from initialMessages prop */}
           {initialMessages.map((msg, index) => (
             <div
-              // Using index as key is okay if list doesn't reorder/delete, but consider message IDs later
-              key={`${internalChatId}-msg-${index}`}
-              className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
+                // Use message ID for key
+                key={msg.id}
+                className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
             >
-              <motion.div
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.3 }}
-                className={`max-w-[80%] p-3 rounded-lg ${
-                  msg.sender === 'user'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100'
-                }`}
-              >
-                {/* Render newlines correctly */}
-                {msg.content.split('\n').map((line, i) => (
+                <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.3 }}
+                    // Apply styling based on sender and type, matching ActionMode
+                    className={`max-w-[80%] p-3 rounded-lg text-sm ${ // Added text-sm for consistency
+                        msg.sender === 'user'
+                            ? 'bg-blue-600 text-white' // User message style
+                            : msg.type === 'error' // Check type for specific styling
+                            ? 'bg-red-100 dark:bg-red-900/50 text-red-900 dark:text-red-200' // Error style
+                            : msg.type === 'tool-request'
+                            ? 'bg-amber-100 dark:bg-amber-900/50 text-amber-900 dark:text-amber-200' // Tool request style
+                            : msg.type === 'tool-response'
+                            ? 'bg-green-100 dark:bg-green-900/50 text-green-900 dark:text-green-200' // Tool response style
+                            : 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100' // Default AI/Status style
+                    }`}
+                >
+                    {/* Render newlines correctly */}
+                    {msg.content.split('\n').map((line, i) => (
                   <p key={i} style={{ minHeight: '1em' }}>{line || '\u00A0'}</p>
                 ))}
               </motion.div>
