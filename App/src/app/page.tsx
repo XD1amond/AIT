@@ -171,7 +171,7 @@ export default function Home() {
     <div className="flex h-screen w-screen overflow-hidden bg-gray-100 dark:bg-gray-900">
 
       {/* Sidebar */}
-      <aside className="w-64 flex flex-col bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">
+      <aside className="w-80 flex flex-col bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">
         <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
             <h1 className="text-xl font-semibold">AIT</h1>
             <Button variant="ghost" size="sm" onClick={handleNewChat} aria-label="New Chat">
@@ -236,7 +236,7 @@ export default function Home() {
                       }`}
                       onClick={() => handleSelectChat(chat.id)}
                     >
-                      <span className="font-medium truncate max-w-[180px]">
+                      <span className="font-medium truncate max-w-[240px]">
                         {chat.title || chat.messages[0]?.content.substring(0, 25) || `Chat ${chat.id.substring(5, 10)}`}
                       </span>
                     </Button>
