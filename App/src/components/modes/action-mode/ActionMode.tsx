@@ -7,7 +7,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { motion } from 'framer-motion';
 import { Send } from 'lucide-react';
 import { ToolApproval } from '@/components/ui/tool-approval';
-import { getSystemInfoPrompt } from '@/prompts/system-info';
+import { getSystemInfoPrompt } from '@/prompts/sections/system-info';
 import { ToolUse, ToolResponse, ToolProgressStatus } from '@/prompts/tools/types';
 import { parseToolUse, containsToolUse, extractTextAroundToolUse } from '@/prompts/tools/tool-parser';
 import { executeTool, isToolEnabled, shouldAutoApprove, isCommandWhitelisted, isCommandBlacklisted, ToolSettings } from '@/prompts/tools';
@@ -36,6 +36,10 @@ interface ActionModeProps {
     settings: AppSettings | null;
     isLoadingSettings: boolean; // Indicate if settings are still loading
     cwd: string | null; // Pass CWD as prop
+    // Mode switching props
+    isModeSwitching?: boolean; // Flag indicating if mode is being switched
+    previousMode?: 'action' | 'walkthrough' | null; // Previous mode before switching
+    onModeSwitchComplete?: () => void; // Callback to notify when mode switch is complete
 }
 
 
@@ -59,37 +63,8 @@ interface AppSettings {
   [key: string]: any;
 }
 
-// Action mode system prompt
-const ACTION_MODE_PROMPT = `
-You are an AI assistant that can help users with various tasks by using tools.
-You have access to the following tools:
-
-## command
-Description: Execute a command in the system's terminal
-Parameters:
-- command: (required) The command to execute
-- cwd: (optional) The working directory to execute the command in
-
-Example:
-<command>
-<command>ls -la</command>
-</command>
-
-## web_search
-Description: Search the web using Brave Search API
-Parameters:
-- query: (required) The search query
-- limit: (optional) Maximum number of results to return (default: 5)
-
-Example:
-<web_search>
-<query>latest AI developments</query>
-<limit>3</limit>
-</web_search>
-
-When you need to use a tool, format your response using the XML-style tags shown in the examples above.
-Wait for the result of the tool execution before proceeding with further actions.
-`;
+// Import the mode prompts
+import { getActionModePrompt } from '@/prompts/modes/action-mode';
 
 // Accept props
 export function ActionMode({
@@ -98,7 +73,10 @@ export function ActionMode({
     onMessagesUpdate,
     settings, // Receive settings as prop
     isLoadingSettings, // Receive loading status as prop
-    cwd // Receive CWD as prop
+    cwd, // Receive CWD as prop
+    isModeSwitching, // Receive mode switching flag
+    previousMode, // Receive previous mode
+    onModeSwitchComplete // Receive callback for mode switch completion
 }: ActionModeProps) {
   const [task, setTask] = useState('');
   // Use initialMessages prop to initialize state
@@ -121,6 +99,25 @@ export function ActionMode({
       setTask(''); // Clear input when chat changes
   }, [activeChatId, initialMessages]);
 
+  // Effect to handle mode switching
+  useEffect(() => {
+      if (isModeSwitching && previousMode !== 'action') {
+          // Add a system message indicating the mode switch
+          const modeSwitchMessage: ChatMessage = {
+              id: `msg_${Date.now()}_mode_switch`,
+              sender: 'ai',
+              content: 'Mode switched to Action Mode. I can now execute commands and use tools on your behalf.',
+              type: 'status'
+          };
+          
+          setMessages(prev => [...prev, modeSwitchMessage]);
+          
+          // Notify parent that mode switch is complete
+          if (onModeSwitchComplete) {
+              onModeSwitchComplete();
+          }
+      }
+  }, [isModeSwitching, previousMode, onModeSwitchComplete]);
 
   // Remove internal ID generation if ChatMessage provides it
   // const nextId = useRef(0);
@@ -315,11 +312,19 @@ export function ActionMode({
         content: msg.content
     }));
 
+    // Get enabled tools from settings
+    const enabledTools = settings?.action_tools ?
+      Object.entries(settings.action_tools)
+        .filter(([_, enabled]) => enabled)
+        .map(([tool, _]) => tool)
+      : [];
+    
     // Add system message (use cwd prop)
     const systemInfoPrompt = getSystemInfoPrompt(cwd || 'unknown', 'action', undefined);
+    const actionModePrompt = getActionModePrompt(enabledTools);
     const systemMessage = {
       role: 'system',
-      content: `${ACTION_MODE_PROMPT}\n\n${systemInfoPrompt}`
+      content: `${actionModePrompt}\n\n${systemInfoPrompt}`
     };
     
     try {

@@ -6,8 +6,8 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { motion } from 'framer-motion';
 import { Send } from 'lucide-react';
-import { techSupportPrompt } from '../../../prompts/tech-support';
-import { getSystemInfoPrompt } from '../../../prompts/system-info';
+import { getSystemInfoPrompt } from '../../../prompts/sections/system-info';
+import { getWalkthroughModePrompt } from '@/prompts/modes/walkthrough-mode';
 import { saveChat, generateChatId, SavedChat } from '../../../lib/chat-storage';
 import { ToolApproval } from '@/components/ui/tool-approval';
 import { ToolUse, ToolResponse, ToolProgressStatus } from '@/prompts/tools/types';
@@ -73,30 +73,12 @@ interface WalkthroughModeProps {
   settings?: AppSettings | null; // Settings passed from parent
   isLoadingSettings?: boolean; // Loading status passed from parent
   cwd?: string | null; // Current working directory passed from parent
+  // Mode switching props
+  isModeSwitching?: boolean; // Flag indicating if mode is being switched
+  previousMode?: 'action' | 'walkthrough' | null; // Previous mode before switching
+  onModeSwitchComplete?: () => void; // Callback to notify when mode switch is complete
 }
 
-// Walkthrough mode system prompt with web search tool
-const WALKTHROUGH_MODE_PROMPT = `
-You are a helpful AI assistant that provides technical support and guidance.
-You can help users troubleshoot issues, explain concepts, and provide step-by-step instructions.
-
-You have access to the following tools:
-
-## web_search
-Description: Search the web using Brave Search API
-Parameters:
-- query: (required) The search query
-- limit: (optional) Maximum number of results to return (default: 5)
-
-Example:
-<web_search>
-<query>latest AI developments</query>
-<limit>3</limit>
-</web_search>
-
-When you need to use a tool, format your response using the XML-style tags shown in the examples above.
-Wait for the result of the tool execution before proceeding with further actions.
-`;
 
 // --- Actual LLM API Call Implementation (remains the same) ---
 async function callLlmApi(
@@ -243,7 +225,10 @@ export function WalkthroughMode({
   onMessagesUpdate,
   settings: externalSettings,
   isLoadingSettings: externalIsLoadingSettings,
-  cwd: externalCwd
+  cwd: externalCwd,
+  isModeSwitching,
+  previousMode,
+  onModeSwitchComplete
 }: WalkthroughModeProps) {
   // Internal state for this component
   const [userInput, setUserInput] = useState('');
@@ -269,6 +254,32 @@ export function WalkthroughMode({
     setUserInput(''); // Reset input when chat changes
     console.log(`WalkthroughMode: Switched/Started chat ID: ${newChatId}`);
   }, [activeChatId]);
+  
+  // Effect to handle mode switching
+  useEffect(() => {
+    if (isModeSwitching && previousMode !== 'walkthrough' && internalChatId) {
+      // Add a system message indicating the mode switch
+      const modeSwitchMessage: ChatMessage = {
+        id: `msg_${Date.now()}_mode_switch`,
+        sender: 'ai',
+        content: 'Mode switched to Walkthrough Mode. I will now guide you through tasks step-by-step without executing commands for you.',
+        type: 'status'
+      };
+      
+      // Update messages with the mode switch notification
+      const updatedMessages = [...initialMessages, modeSwitchMessage];
+      
+      // Save the updated messages directly
+      if (internalChatId) {
+        onMessagesUpdate(updatedMessages, internalChatId);
+      }
+      
+      // Notify parent that mode switch is complete
+      if (onModeSwitchComplete) {
+        onModeSwitchComplete();
+      }
+    }
+  }, [isModeSwitching, previousMode, internalChatId, initialMessages, onMessagesUpdate, onModeSwitchComplete]);
 
   // Effect to fetch system data and settings - runs when internalChatId is set/changes
   useEffect(() => {
@@ -574,9 +585,17 @@ export function WalkthroughMode({
     
     setIsLoading(true);
     
+    // Get enabled tools from settings
+    const enabledTools = appSettings?.walkthrough_tools ?
+      Object.entries(appSettings.walkthrough_tools)
+        .filter(([_, enabled]) => enabled)
+        .map(([tool, _]) => tool)
+      : [];
+    
     // Construct system prompt
     const systemInfoDetails = getSystemInfoPrompt(cwd || 'unknown', 'walkthrough', undefined);
-    const finalSystemPrompt = `${WALKTHROUGH_MODE_PROMPT}\n\n${techSupportPrompt}\n\n${systemInfoDetails}`;
+    const walkthroughModePrompt = getWalkthroughModePrompt(enabledTools);
+    const finalSystemPrompt = `${walkthroughModePrompt}\n\n${systemInfoDetails}`;
     
     // Get API key
     const provider = appSettings.walkthrough_provider;

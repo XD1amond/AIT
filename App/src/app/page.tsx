@@ -57,6 +57,10 @@ export default function Home() {
   const [filterMode, setFilterMode] = useState<'all' | 'action' | 'walkthrough'>('all'); // Filter state
   const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest'); // Sort state
   const [searchQuery, setSearchQuery] = useState<string>(''); // Search state
+  
+  // State for mode switching
+  const [previousMode, setPreviousMode] = useState<Mode | null>(null);
+  const [isModeSwitching, setIsModeSwitching] = useState(false);
 
   // State for settings and CWD
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -449,7 +453,14 @@ export default function Home() {
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10">
              <RadioGroup
                 value={currentMode}
-                onValueChange={(value: string) => setCurrentMode(value as Mode)}
+                onValueChange={(value: string) => {
+                  // Store the previous mode before switching
+                  setPreviousMode(currentMode);
+                  // Set the new mode
+                  setCurrentMode(value as Mode);
+                  // Set the mode switching flag to true
+                  setIsModeSwitching(true);
+                }}
                 className="relative flex space-x-1 bg-gray-200 dark:bg-gray-700 p-1 rounded-full shadow-md"
              >
                 {modes.map((mode) => (
@@ -481,36 +492,33 @@ export default function Home() {
 
         {/* Chat Interface Area */}
         <div className="flex-1 overflow-hidden flex p-4 md:p-6 lg:p-8 pt-20"> {/* Added padding-top */}
-           <AnimatePresence mode="wait">
-             <motion.div
-               key={`${currentMode}-${activeChatId || 'new-chat'}`}
-               initial={{ opacity: 0 }}
-               animate={{ opacity: 1 }}
-               exit={{ opacity: 0 }}
-               transition={{ duration: 0.15 }}
-               className="w-full h-full flex" // Ensure the motion div takes full space
-             >
-                {currentMode === 'action' ? (
-                   <ActionMode
-                       activeChatId={activeChatId}
-                       initialMessages={activeChatMessages}
-                       onMessagesUpdate={handleMessagesUpdate}
-                       settings={settings} // Pass settings
-                       isLoadingSettings={isLoadingSettings} // Pass loading status
-                       cwd={cwd} // Pass CWD
-                   />
-                ) : (
-                   <WalkthroughMode
-                       activeChatId={activeChatId}
-                       initialMessages={activeChatMessages}
-                       onMessagesUpdate={handleMessagesUpdate}
-                       settings={settings}
-                       isLoadingSettings={isLoadingSettings}
-                       cwd={cwd}
-                   />
-                )}
-             </motion.div>
-          </AnimatePresence>
+           <div className="w-full h-full flex">
+              {currentMode === 'action' ? (
+                 <ActionMode
+                     activeChatId={activeChatId}
+                     initialMessages={activeChatMessages}
+                     onMessagesUpdate={handleMessagesUpdate}
+                     settings={settings} // Pass settings
+                     isLoadingSettings={isLoadingSettings} // Pass loading status
+                     cwd={cwd} // Pass CWD
+                     isModeSwitching={isModeSwitching} // Pass mode switching flag
+                     previousMode={previousMode} // Pass previous mode
+                     onModeSwitchComplete={() => setIsModeSwitching(false)} // Callback to reset mode switching flag
+                 />
+              ) : (
+                 <WalkthroughMode
+                     activeChatId={activeChatId}
+                     initialMessages={activeChatMessages}
+                     onMessagesUpdate={handleMessagesUpdate}
+                     settings={settings}
+                     isLoadingSettings={isLoadingSettings}
+                     cwd={cwd}
+                     isModeSwitching={isModeSwitching} // Pass mode switching flag
+                     previousMode={previousMode} // Pass previous mode
+                     onModeSwitchComplete={() => setIsModeSwitching(false)} // Callback to reset mode switching flag
+                 />
+              )}
+           </div>
         </div>
       </main>
     </div>
