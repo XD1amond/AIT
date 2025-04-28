@@ -15,7 +15,7 @@ import { parseToolUse, containsToolUse, extractTextAroundToolUse } from '@/promp
 import { executeTool, isToolEnabled, shouldAutoApprove, isCommandWhitelisted, isCommandBlacklisted, ToolSettings } from '@/prompts/tools';
 
 // Define ApiProvider type locally
-export type ApiProvider = 'openai' | 'claude' | 'openrouter';
+export type ApiProvider = 'openai' | 'claude' | 'openrouter' | 'gemini' | 'deepseek';
 
 // Define types for system info (matching Rust structs)
 interface OsInfo {
@@ -41,6 +41,8 @@ interface AppSettings {
     claude_api_key: string;
     open_router_api_key: string;
     brave_search_api_key: string;
+    gemini_api_key: string;
+    deepseek_api_key: string;
     walkthrough_provider: ApiProvider;
     walkthrough_model: string;
     action_provider: ApiProvider;
@@ -102,6 +104,7 @@ async function callLlmApi(
     systemPrompt: string,
     provider: ApiProvider,
     apiKey: string | undefined,
+    modelName: string,
     toolUseHandler?: (toolUse: ToolUse) => Promise<ToolResponse>
 ): Promise<string | { content: string; toolUse: ToolUse }> {
   console.log(`Calling LLM API for provider: ${provider}...`);
@@ -120,7 +123,7 @@ async function callLlmApi(
         endpoint = 'https://api.openai.com/v1/chat/completions';
         headers['Authorization'] = `Bearer ${apiKey}`;
         body = {
-          model: "gpt-4o", // Consider making model configurable via settings
+          model: modelName || "gpt-4o", // Use configured model
           messages: [
             { role: "system", content: systemPrompt },
             ...messages.map(msg => ({ role: msg.sender === 'ai' ? 'assistant' : 'user', content: msg.content }))
@@ -133,7 +136,7 @@ async function callLlmApi(
         headers['x-api-key'] = apiKey;
         headers['anthropic-version'] = '2023-06-01';
         body = {
-          model: "claude-3-opus-20240229", // Consider making model configurable
+          model: modelName || "claude-3-opus-20240229", // Use configured model
           system: systemPrompt,
           messages: messages.map(msg => ({ role: msg.sender === 'ai' ? 'assistant' : 'user', content: msg.content })),
           max_tokens: 1024,
@@ -144,11 +147,43 @@ async function callLlmApi(
         endpoint = 'https://openrouter.ai/api/v1/chat/completions';
         headers['Authorization'] = `Bearer ${apiKey}`;
         body = {
-          model: "openai/gpt-4o", // Consider making model configurable
+          model: modelName || "openai/gpt-4o", // Use configured model
           messages: [
             { role: "system", content: systemPrompt },
             ...messages.map(msg => ({ role: msg.sender === 'ai' ? 'assistant' : 'user', content: msg.content }))
           ],
+        };
+        break;
+        
+      case 'gemini':
+        endpoint = 'https://generativelanguage.googleapis.com/v1beta/models/' +
+                  (modelName || 'gemini-pro') + ':generateContent';
+        headers['x-goog-api-key'] = apiKey;
+        body = {
+          contents: [
+            { role: 'user', parts: [{ text: systemPrompt }] },
+            ...messages.map(msg => ({
+              role: msg.sender === 'ai' ? 'model' : 'user',
+              parts: [{ text: msg.content }]
+            }))
+          ],
+          generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: 1024,
+          }
+        };
+        break;
+        
+      case 'deepseek':
+        endpoint = 'https://api.deepseek.com/v1/chat/completions';
+        headers['Authorization'] = `Bearer ${apiKey}`;
+        body = {
+          model: modelName || "deepseek-chat",
+          messages: [
+            { role: "system", content: systemPrompt },
+            ...messages.map(msg => ({ role: msg.sender === 'ai' ? 'assistant' : 'user', content: msg.content }))
+          ],
+          max_tokens: 1024,
         };
         break;
 
@@ -171,10 +206,12 @@ async function callLlmApi(
     const data = await response.json();
 
     let aiContent = '';
-    if (provider === 'openai' || provider === 'openrouter') {
+    if (provider === 'openai' || provider === 'openrouter' || provider === 'deepseek') {
       aiContent = data.choices?.[0]?.message?.content;
     } else if (provider === 'claude') {
       aiContent = data.content?.[0]?.text;
+    } else if (provider === 'gemini') {
+      aiContent = data.candidates?.[0]?.content?.parts?.[0]?.text;
     }
 
     if (!aiContent) {
@@ -548,6 +585,8 @@ export function WalkthroughMode({
         case 'openai': apiKey = appSettings.openai_api_key; break;
         case 'claude': apiKey = appSettings.claude_api_key; break;
         case 'openrouter': apiKey = appSettings.open_router_api_key; break;
+        case 'gemini': apiKey = appSettings.gemini_api_key; break;
+        case 'deepseek': apiKey = appSettings.deepseek_api_key; break;
         default: apiKey = undefined;
     }
     
@@ -571,6 +610,7 @@ export function WalkthroughMode({
         finalSystemPrompt,
         provider,
         apiKey,
+        appSettings.walkthrough_model,
         async (toolUse) => {
           // This is called when the AI wants to use a tool
           

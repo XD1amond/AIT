@@ -13,7 +13,7 @@ import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
 
 // Types (copied from ApiKeySettings.tsx)
-type ApiProvider = 'openai' | 'claude' | 'openrouter';
+type ApiProvider = 'openai' | 'claude' | 'openrouter' | 'gemini' | 'deepseek';
 
 // Define available themes
 type Theme = 'light' | 'dark' | 'system';
@@ -21,6 +21,8 @@ type Theme = 'light' | 'dark' | 'system';
 interface AppSettings {
     openai_api_key: string;
     claude_api_key: string;
+    gemini_api_key: string;
+    deepseek_api_key: string;
     open_router_api_key: string;
     brave_search_api_key: string; // Added for Brave Search
     // Provider/Model settings (example structure, adjust as needed)
@@ -43,14 +45,31 @@ interface AppSettings {
     theme: Theme;
 }
 
-// Example model lists (replace with actual valid models)
-const OPENAI_MODELS = ["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"];
-const CLAUDE_MODELS = ["claude-3-opus-20240229", "claude-3-sonnet-20240229", "claude-3-haiku-20240307"];
-const OPENROUTER_MODELS = ["openai/gpt-4o", "anthropic/claude-3-opus", "google/gemini-pro-1.5"]; // Example format
+// Import models from our shared models file
+import {
+  openAiNativeModels,
+  anthropicModels,
+  geminiModels,
+  deepSeekModels
+} from '@/shared/models';
+
+// Create model lists from our defined models
+const OPENAI_MODELS = Object.keys(openAiNativeModels);
+const CLAUDE_MODELS = Object.keys(anthropicModels);
+const GEMINI_MODELS = Object.keys(geminiModels);
+const DEEPSEEK_MODELS = Object.keys(deepSeekModels);
+const OPENROUTER_MODELS = [
+  ...OPENAI_MODELS.map(model => `openai/${model}`),
+  ...CLAUDE_MODELS.map(model => `anthropic/${model}`),
+  ...GEMINI_MODELS.map(model => `google/${model}`),
+  ...DEEPSEEK_MODELS.map(model => `deepseek/${model}`)
+];
 
 const PROVIDER_MODELS: Record<ApiProvider, string[]> = {
     openai: OPENAI_MODELS,
     claude: CLAUDE_MODELS,
+    gemini: GEMINI_MODELS,
+    deepseek: DEEPSEEK_MODELS,
     openrouter: OPENROUTER_MODELS,
 };
 
@@ -59,6 +78,8 @@ export default function SettingsPage() {
   // State for API Keys Tab
   const [openaiKey, setOpenaiKey] = useState('');
   const [claudeKey, setClaudeKey] = useState('');
+  const [geminiKey, setGeminiKey] = useState('');
+  const [deepseekKey, setDeepseekKey] = useState('');
   const [openRouterKey, setOpenRouterKey] = useState('');
   const [braveSearchKey, setBraveSearchKey] = useState(''); // Added for Brave Search
 
@@ -113,6 +134,8 @@ export default function SettingsPage() {
           console.log("Settings received on Settings Page:", loadedSettings);
           setOpenaiKey(loadedSettings.openai_api_key || '');
           setClaudeKey(loadedSettings.claude_api_key || '');
+          setGeminiKey(loadedSettings.gemini_api_key || '');
+          setDeepseekKey(loadedSettings.deepseek_api_key || '');
           setOpenRouterKey(loadedSettings.open_router_api_key || '');
           setBraveSearchKey(loadedSettings.brave_search_api_key || ''); // Load Brave key
 
@@ -142,6 +165,8 @@ export default function SettingsPage() {
           // Set defaults in UI if loading fails
           setOpenaiKey('');
           setClaudeKey('');
+          setGeminiKey('');
+          setDeepseekKey('');
           setOpenRouterKey('');
           setBraveSearchKey(''); // Reset Brave key on error
           // Reset models/theme state on error too
@@ -166,6 +191,8 @@ export default function SettingsPage() {
         // Set defaults
         setOpenaiKey('');
         setClaudeKey('');
+        setGeminiKey('');
+        setDeepseekKey('');
         setOpenRouterKey('');
         setBraveSearchKey(''); // Reset Brave key on error
         // Reset models/theme state on error too
@@ -206,6 +233,8 @@ export default function SettingsPage() {
     const currentSettings: AppSettings = {
       openai_api_key: openaiKey || '', // Ensure strings are not undefined
       claude_api_key: claudeKey || '',
+      gemini_api_key: geminiKey || '',
+      deepseek_api_key: deepseekKey || '',
       open_router_api_key: openRouterKey || '',
       brave_search_api_key: braveSearchKey || '', // Save Brave key
       // Models
@@ -317,6 +346,34 @@ export default function SettingsPage() {
                       />
                     </div>
                     <div className="grid grid-cols-4 items-center gap-4">
+                      <Label htmlFor="gemini" className="text-right col-span-1">
+                        Gemini
+                      </Label>
+                      <Input
+                        id="gemini"
+                        type="password"
+                        value={geminiKey}
+                        onChange={(e) => setGeminiKey(e.target.value)}
+                        placeholder="AIza..."
+                        className="col-span-3"
+                        disabled={isLoading}
+                      />
+                    </div>
+                    <div className="grid grid-cols-4 items-center gap-4">
+                      <Label htmlFor="deepseek" className="text-right col-span-1">
+                        DeepSeek
+                      </Label>
+                      <Input
+                        id="deepseek"
+                        type="password"
+                        value={deepseekKey}
+                        onChange={(e) => setDeepseekKey(e.target.value)}
+                        placeholder="sk-..."
+                        className="col-span-3"
+                        disabled={isLoading}
+                      />
+                    </div>
+                    <div className="grid grid-cols-4 items-center gap-4">
                       <Label htmlFor="openrouter" className="text-right col-span-1">
                         OpenRouter
                       </Label>
@@ -389,6 +446,8 @@ export default function SettingsPage() {
                            <SelectContent>
                                <SelectItem value="openai">OpenAI</SelectItem>
                                <SelectItem value="claude">Claude</SelectItem>
+                               <SelectItem value="gemini">Gemini</SelectItem>
+                               <SelectItem value="deepseek">DeepSeek</SelectItem>
                                <SelectItem value="openrouter">OpenRouter</SelectItem>
                            </SelectContent>
                         </Select>
@@ -439,6 +498,8 @@ export default function SettingsPage() {
                            <SelectContent>
                                <SelectItem value="openai">OpenAI</SelectItem>
                                <SelectItem value="claude">Claude</SelectItem>
+                               <SelectItem value="gemini">Gemini</SelectItem>
+                               <SelectItem value="deepseek">DeepSeek</SelectItem>
                                <SelectItem value="openrouter">OpenRouter</SelectItem>
                            </SelectContent>
                         </Select>

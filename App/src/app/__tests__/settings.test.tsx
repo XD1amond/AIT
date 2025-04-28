@@ -15,6 +15,8 @@ describe('Settings Page', () => {
   const mockSettings = {
     openai_api_key: 'test-openai-key',
     claude_api_key: 'test-claude-key',
+    gemini_api_key: 'test-gemini-key',
+    deepseek_api_key: 'test-deepseek-key',
     open_router_api_key: 'test-openrouter-key',
     brave_search_api_key: 'test-brave-key',
     walkthrough_provider: 'openai',
@@ -108,6 +110,8 @@ describe('Settings Page', () => {
         settings: expect.objectContaining({
           openai_api_key: 'test-openai-key',
           claude_api_key: 'test-claude-key',
+          gemini_api_key: 'test-gemini-key',
+          deepseek_api_key: 'test-deepseek-key',
           open_router_api_key: 'test-openrouter-key',
           brave_search_api_key: 'test-brave-key',
           walkthrough_provider: 'openai',

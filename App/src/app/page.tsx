@@ -29,6 +29,8 @@ interface AppSettings {
     claude_api_key: string;
     open_router_api_key: string;
     brave_search_api_key: string;
+    gemini_api_key: string;
+    deepseek_api_key: string;
     action_provider: ApiProvider;
     action_model: string;
     walkthrough_provider: ApiProvider;

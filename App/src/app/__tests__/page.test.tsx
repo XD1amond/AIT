@@ -98,6 +98,8 @@ global.fetch = jest.fn(() =>
 const mockSettingsData = {
     openai_api_key: 'test-openai-key',
     claude_api_key: 'test-claude-key',
+    gemini_api_key: 'test-gemini-key',
+    deepseek_api_key: 'test-deepseek-key',
     open_router_api_key: 'test-openrouter-key',
     brave_search_api_key: 'test-brave-key',
     walkthrough_provider: 'openai',
@@ -339,36 +341,67 @@ describe('Home Component (page.tsx)', () => {
     });
 
 
-    // --- Tests for filtering/sorting are still skipped due to Select component issues ---
-    test.skip('filtering chats works', async () => {
-    render(<Home />);
-    await waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith('get_all_chats');
+    // Tests for filtering/sorting
+    test('filtering chats works by directly manipulating state', async () => {
+        // Create a custom render function that gives us access to the component's state
+        const user = userEvent.setup();
+        const { container } = render(<Home />);
+        
+        // Wait for initial load
+        await waitFor(() => {
+            expect(mockInvoke).toHaveBeenCalledWith('get_all_chats');
+        });
+
+        // Wait for chat buttons to be present
+        await screen.findByTestId('chat-button-chat_test_1');
+        await screen.findByTestId('chat-button-chat_test_2');
+        
+        // Find the search input
+        const searchInput = screen.getByPlaceholderText('Search chats...');
+        expect(searchInput).toBeInTheDocument();
+        
+        // Type in the search input to filter chats
+        await user.type(searchInput, 'Action');
+        
+        // Check that only the chat with "Action request" is visible
+        await waitFor(() => {
+            expect(screen.getByTestId('chat-button-chat_test_2')).toBeInTheDocument();
+            expect(screen.queryByTestId('chat-button-chat_test_1')).not.toBeInTheDocument();
+        });
+        
+        // Clear the search input
+        await user.clear(searchInput);
+        
+        // Check that both chats are visible again
+        await waitFor(() => {
+            expect(screen.getByTestId('chat-button-chat_test_1')).toBeInTheDocument();
+            expect(screen.getByTestId('chat-button-chat_test_2')).toBeInTheDocument();
+        });
     });
 
-    // Wait for list items to be present
-    await screen.findByText(/Old message/);
-    await screen.findByText(/Action request/);
-    
-    // This test is skipped because the Select component interactions
-    // are difficult to test in JSDOM environment
-   });
+    test('sorting chats works by checking initial order', async () => {
+        render(<Home />);
+        await waitFor(() => {
+            expect(mockInvoke).toHaveBeenCalledWith('get_all_chats');
+        });
 
-   // Skip this test for now as it's having issues with the Select component in JSDOM
-   test.skip('sorting chats works', async () => {
-    render(<Home />);
-    await waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith('get_all_chats');
+        // Get the chat list
+        const chatList = await screen.findByTestId('chat-list');
+        
+        // Wait for chat buttons to be present
+        await screen.findByTestId('chat-button-chat_test_1');
+        await screen.findByTestId('chat-button-chat_test_2');
+        
+        // Check the initial order (newest first)
+        // In the DOM, the newest chat (chat_test_2) should appear before the older chat (chat_test_1)
+        const chatButtons = chatList.querySelectorAll('[data-testid^="chat-button-"]');
+        expect(chatButtons.length).toBe(2);
+        expect(chatButtons[0].getAttribute('data-testid')).toBe('chat-button-chat_test_2');
+        expect(chatButtons[1].getAttribute('data-testid')).toBe('chat-button-chat_test_1');
+        
+        // We can't easily test changing the sort order without interacting with the Select component,
+        // but we've verified the initial sorting works correctly
     });
-
-    const chatList = screen.getByTestId('chat-list');
-    
-    // Initial: Newest first - wait for buttons to be rendered
-    await screen.findByText(/Action request/);
-    
-    // This test is skipped because the Select component interactions
-    // are difficult to test in JSDOM environment
-   });
 
   // TODO: Test handleMessagesUpdate callback
 });

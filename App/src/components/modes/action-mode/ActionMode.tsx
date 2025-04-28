@@ -39,8 +39,14 @@ interface ActionModeProps {
 }
 
 
-// Define the interface for settings (keep as is for now)
+// Define the interface for settings
 interface AppSettings {
+  openai_api_key: string;
+  claude_api_key: string;
+  open_router_api_key: string;
+  brave_search_api_key: string;
+  gemini_api_key: string;
+  deepseek_api_key: string;
   action_provider: string;
   action_model: string;
   auto_approve_tools: boolean;
@@ -339,10 +345,12 @@ export function ActionMode({
       // Call the appropriate API
       let aiResponse: string;
       
-      if (provider === 'openai' || provider === 'openrouter') {
-        const endpoint = provider === 'openai' 
+      if (provider === 'openai' || provider === 'openrouter' || provider === 'deepseek') {
+        const endpoint = provider === 'openai'
           ? 'https://api.openai.com/v1/chat/completions'
-          : 'https://openrouter.ai/api/v1/chat/completions';
+          : provider === 'openrouter'
+          ? 'https://openrouter.ai/api/v1/chat/completions'
+          : 'https://api.deepseek.com/v1/chat/completions';
         
         const response = await fetch(endpoint, {
           method: 'POST',
@@ -384,6 +392,40 @@ export function ActionMode({
         
         const data = await response.json();
         aiResponse = data.content[0].text;
+      } else if (provider === 'gemini') {
+        const modelName = settings.action_model.replace('gemini-', '');
+        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`;
+        
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': apiKey
+          },
+          body: JSON.stringify({
+            contents: [
+              { role: 'user', parts: [{ text: systemMessage.content }] },
+              ...apiMessages.map(msg => ({
+                role: msg.role === 'assistant' ? 'model' : 'user',
+                parts: [{ text: msg.content }]
+              }))
+            ],
+            generationConfig: {
+              temperature: 0.7,
+              maxOutputTokens: 1024,
+            }
+          }),
+        });
+        
+        if (!response.ok) {
+          throw new Error(`API request failed with status ${response.status}`);
+        }
+        
+        const data = await response.json();
+        aiResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!aiResponse) {
+          throw new Error('Failed to parse response from Gemini API');
+        }
       } else {
         throw new Error(`Unsupported provider: ${provider}`);
       }
