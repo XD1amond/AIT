@@ -400,7 +400,7 @@ export function ActionMode({
                 id: `msg_${Date.now()}_pre`,
                 sender: 'ai',
                 content: before,
-                type: 'result', // Or 'ai' if consolidating types
+                type: 'ai', // Using 'ai' type for consistency with ChatMessage
             });
         }
 
@@ -418,7 +418,7 @@ export function ActionMode({
             // Check if the tool is enabled for action mode
             if (!isToolEnabled(toolUse.name, 'action', getToolSettings())) {
                 const errorContent = `Tool '${toolUse.name}' is not enabled for action mode.`;
-                const finalMessages = [
+                const finalMessages: ChatMessage[] = [
                     ...intermediateMessages,
                     { id: `msg_${Date.now()}_err`, sender: 'ai', content: errorContent, type: 'error' }
                 ];
@@ -435,7 +435,7 @@ export function ActionMode({
                 // Check blacklist first
                 if (isCommandBlacklisted(command, getToolSettings())) {
                     const errorContent = `Command '${command}' is blacklisted and cannot be executed.`;
-                    const finalMessages = [
+                    const finalMessages: ChatMessage[] = [
                         ...intermediateMessages,
                         { id: `msg_${Date.now()}_blk`, sender: 'ai', content: errorContent, type: 'error' }
                     ];
@@ -471,13 +471,13 @@ export function ActionMode({
 
         // If we reach here, it means there was no tool use or it was handled above
         // Add AI's explanation after the tool use (if any)
-        let finalMessages = [...intermediateMessages];
+        let finalMessages: ChatMessage[] = [...intermediateMessages];
         if (after) {
             finalMessages.push({
                 id: `msg_${Date.now()}_post`,
                 sender: 'ai',
                 content: after,
-                type: 'result', // Or 'ai'
+                type: 'ai', // Using 'ai' type for consistency with ChatMessage
             });
         }
         setMessages(finalMessages);

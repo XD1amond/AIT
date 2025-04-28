@@ -68,6 +68,9 @@ interface WalkthroughModeProps {
   activeChatId: string | null; // ID of the chat to load, or null for new chat
   initialMessages: ChatMessage[]; // Initial messages for the chat (controlled by parent)
   onMessagesUpdate: (messages: ChatMessage[], chatId: string) => void; // Callback when messages change
+  settings?: AppSettings | null; // Settings passed from parent
+  isLoadingSettings?: boolean; // Loading status passed from parent
+  cwd?: string | null; // Current working directory passed from parent
 }
 
 // Walkthrough mode system prompt with web search tool
@@ -197,16 +200,25 @@ async function callLlmApi(
 }
 // --- End LLM API Call Implementation ---
 
-export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdate }: WalkthroughModeProps) {
+export function WalkthroughMode({
+  activeChatId,
+  initialMessages,
+  onMessagesUpdate,
+  settings: externalSettings,
+  isLoadingSettings: externalIsLoadingSettings,
+  cwd: externalCwd
+}: WalkthroughModeProps) {
   // Internal state for this component
   const [userInput, setUserInput] = useState('');
   const [isLoading, setIsLoading] = useState(false); // For LLM responses
   const [systemInfo, setSystemInfo] = useState<SystemInfo>({});
   const [isFetchingSysInfo, setIsFetchingSysInfo] = useState(true);
-  const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
-  const [isFetchingSettings, setIsFetchingSettings] = useState(true);
+  
+  // Use external settings if provided, otherwise use internal state
+  const [appSettings, setAppSettings] = useState<AppSettings | null>(externalSettings || null);
+  const [isFetchingSettings, setIsFetchingSettings] = useState(externalIsLoadingSettings !== undefined ? externalIsLoadingSettings : true);
   const [settingsError, setSettingsError] = useState<string | null>(null);
-  const [cwd, setCwd] = useState<string | null>(null);
+  const [cwd, setCwd] = useState<string | null>(externalCwd || null);
   const [internalChatId, setInternalChatId] = useState<string | null>(null); // Tracks the ID for the current session
   const [pendingToolUse, setPendingToolUse] = useState<ToolUse | null>(null);
   const [toolProgress, setToolProgress] = useState<ToolProgressStatus | null>(null);
@@ -224,6 +236,40 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
   // Effect to fetch system data and settings - runs when internalChatId is set/changes
   useEffect(() => {
     if (!internalChatId) return; // Don't run if ID isn't set yet
+
+    // Helper function to fetch only system info
+    const fetchSystemInfo = async () => {
+      if (typeof window === 'undefined' || !('Tauri' in window)) {
+        setIsFetchingSysInfo(false);
+        return;
+      }
+
+      setIsFetchingSysInfo(true);
+      try {
+        const tauriApi = window as any;
+        if (tauriApi.__TAURI__?.invoke) {
+          const os = await tauriApi.__TAURI__.invoke('get_os_info');
+          const memory = await tauriApi.__TAURI__.invoke('get_memory_info');
+          setSystemInfo({ os, memory });
+        }
+      } catch (error) {
+        console.error("Failed to fetch system info:", error);
+        setSystemInfo({ error: 'Could not load system information via Tauri.' });
+      } finally {
+        setIsFetchingSysInfo(false);
+      }
+    };
+
+    // If external settings are provided, use them instead of fetching
+    if (externalSettings !== undefined && externalCwd !== undefined) {
+      setAppSettings(externalSettings);
+      setCwd(externalCwd);
+      setIsFetchingSettings(false);
+      
+      // Only fetch system info if needed
+      fetchSystemInfo();
+      return;
+    }
 
     const fetchInitialData = async () => {
       console.log(`WalkthroughMode: Fetching initial data for chat ID: ${internalChatId}`);
@@ -348,7 +394,7 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
     // Debounce or delay fetch slightly? For now, run directly.
     fetchInitialData();
 
-  }, [internalChatId, activeChatId, initialMessages.length, onMessagesUpdate]); // Rerun when internalChatId changes
+  }, [internalChatId, activeChatId, initialMessages.length, onMessagesUpdate, externalSettings, externalCwd]); // Rerun when internalChatId changes
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -650,30 +696,31 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
       return;
     }
     
-    // Remove the attempt to re-fetch settings here. Rely on the initial load.
+    // Check if settings are available (either from props or internal state)
+    const currentSettings = externalSettings || appSettings;
     
-        // If settings are not loaded or there's an error, show error message
-        if (!appSettings) {
-            const errorMessage: ChatMessage = {
-                id: `msg_${Date.now()}_settings_err1`, // Add ID
-                sender: 'ai',
-                content: 'Settings not loaded. Please try again.',
-                type: 'error' // Add type
-            };
-            onMessagesUpdate([...initialMessages, errorMessage], internalChatId);
-            return;
-        }
+    // If settings are not loaded or there's an error, show error message
+    if (!currentSettings) {
+        const errorMessage: ChatMessage = {
+            id: `msg_${Date.now()}_settings_err1`, // Add ID
+            sender: 'ai',
+            content: 'Settings not loaded. Please try again.',
+            type: 'error' // Add type
+        };
+        onMessagesUpdate([...initialMessages, errorMessage], internalChatId);
+        return;
+    }
 
-        if (settingsError) {
-            const errorMessage: ChatMessage = {
-                id: `msg_${Date.now()}_settings_err2`, // Add ID
-                sender: 'ai',
-                content: `Error with settings: ${settingsError}. Please check your settings.`,
-                type: 'error' // Add type
-            };
-            onMessagesUpdate([...initialMessages, errorMessage], internalChatId);
-            return;
-        }
+    if (settingsError) {
+        const errorMessage: ChatMessage = {
+            id: `msg_${Date.now()}_settings_err2`, // Add ID
+            sender: 'ai',
+            content: `Error with settings: ${settingsError}. Please check your settings.`,
+            type: 'error' // Add type
+        };
+        onMessagesUpdate([...initialMessages, errorMessage], internalChatId);
+        return;
+    }
 
         const newUserMessage: ChatMessage = {
             id: `msg_${Date.now()}_user`, // Add ID
@@ -696,6 +743,7 @@ export function WalkthroughMode({ activeChatId, initialMessages, onMessagesUpdat
     isLoading,
     internalChatId,
     appSettings,
+    externalSettings,
     settingsError,
     initialMessages,
     onMessagesUpdate,

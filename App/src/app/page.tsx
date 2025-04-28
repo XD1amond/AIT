@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from "framer-motion";
 import { invoke, isTauri } from '@tauri-apps/api/core'; // Import invoke and isTauri
 import { ActionMode } from '@/components/modes/action-mode/ActionMode';
-import { WalkthroughMode, ChatMessage } from '@/components/modes/walkthrough-mode/WalkthroughMode';
+import { WalkthroughMode, ChatMessage, ApiProvider } from '@/components/modes/walkthrough-mode/WalkthroughMode';
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -25,9 +25,13 @@ const modes: { id: Mode; label: string }[] = [
 
 // Define AppSettings interface (can be moved to a shared types file later)
 interface AppSettings {
-    action_provider: string;
+    openai_api_key: string;
+    claude_api_key: string;
+    open_router_api_key: string;
+    brave_search_api_key: string;
+    action_provider: ApiProvider;
     action_model: string;
-    walkthrough_provider: string;
+    walkthrough_provider: ApiProvider;
     walkthrough_model: string;
     auto_approve_tools: boolean;
     walkthrough_tools: Record<string, boolean>;
@@ -36,6 +40,7 @@ interface AppSettings {
     auto_approve_action: Record<string, boolean>;
     whitelisted_commands: string[];
     blacklisted_commands: string[];
+    theme: string;
     [key: string]: any; // Allow other settings keys
 }
 
@@ -228,71 +233,64 @@ export default function Home() {
 
     setActiveChatMessages(updatedMessages);
 
-    // Use the state updater function for savedChats to get the latest title
-    let title = "Untitled Chat"; // Default title
-    setSavedChats(prevChats => {
-        const currentChat = prevChats.find(c => c.id === chatIdToSave);
-        title = currentChat?.title || "Untitled Chat"; // Get existing title or use default
+    // Find the current chat to get its title
+    const currentChat = savedChats.find(c => c.id === chatIdToSave);
+    
+    // Determine the title
+    let title = currentChat?.title || "Untitled Chat";
+    if (!title || title === "New Chat" || title === "Untitled Chat") {
+      const firstUserMessage = updatedMessages.find(m => m.sender === 'user');
+      title = firstUserMessage?.content.substring(0, 30) || `Chat ${finalChatId.substring(0, 8)}`;
+    }
 
-        if (!title || title === "New Chat" || title === "Untitled Chat") {
-            const firstUserMessage = updatedMessages.find(m => m.sender === 'user');
-            title = firstUserMessage?.content.substring(0, 30) || `Chat ${finalChatId.substring(0, 8)}`; // Use shorter ID substring
-        }
+    // Create the chat object to save
+    const chatToSave: SavedChat = {
+      id: finalChatId,
+      timestamp: Date.now(),
+      mode: currentMode,
+      messages: updatedMessages,
+      title: title,
+    };
 
-        const chatToSave: SavedChat = {
-          id: finalChatId,
-          timestamp: Date.now(),
-          mode: currentMode,
-          messages: updatedMessages,
-          title: title, // Add the title property
-        };
+    // Save the chat
+    saveChat(chatToSave)
+      .then(() => {
+        // Update the state after successful save
+        setSavedChats(prev => {
+          // Remove the placeholder if it exists
+          const chatsWithoutPlaceholder = prev.filter(c => c.id !== chatIdToSave);
 
-        saveChat(chatToSave)
-          .then(() => {
-            // Update state after successful save
-            setSavedChats(prev => {
-              // Remove the placeholder if it exists
-              const chatsWithoutPlaceholder = prev.filter(c => c.id !== chatIdToSave);
+          // Add or update the actual chat
+          const existingIndex = chatsWithoutPlaceholder.findIndex(c => c.id === finalChatId);
+          let newChats;
+          if (existingIndex > -1) {
+            // Update existing chat
+            newChats = [...chatsWithoutPlaceholder];
+            newChats[existingIndex] = chatToSave;
+          } else {
+            // Add new chat
+            newChats = [chatToSave, ...chatsWithoutPlaceholder];
+          }
 
-              // Add or update the actual chat
-              const existingIndex = chatsWithoutPlaceholder.findIndex(c => c.id === finalChatId);
-              let newChats;
-              if (existingIndex > -1) {
-                // Update existing chat
-                newChats = [...chatsWithoutPlaceholder];
-                newChats[existingIndex] = chatToSave;
-              } else {
-                // Add new chat
-                newChats = [chatToSave, ...chatsWithoutPlaceholder];
-              }
-
-              // Re-sort based on current sort order
-              return newChats.sort((a, b) => {
-                  if (sortOrder === 'newest') {
-                      return b.timestamp - a.timestamp;
-                  } else {
-                      return a.timestamp - b.timestamp;
-                  }
-              });
-            });
-
-            // If this was a new chat, update the activeChatId to the real ID
-            if (isNewChat) {
-                setActiveChatId(finalChatId);
-            } else if (activeChatId === null) { // Handle case where app starts with no chats
-                 setActiveChatId(finalChatId);
+          // Re-sort based on current sort order
+          return newChats.sort((a, b) => {
+            if (sortOrder === 'newest') {
+              return b.timestamp - a.timestamp;
+            } else {
+              return a.timestamp - b.timestamp;
             }
-          })
-          // Use finalChatId in the catch block
-          .catch(err => console.error(`Failed to save chat ${finalChatId}:`, err));
+          });
+        });
 
-        // Return previous state if no immediate update needed before save completes
-        // The actual update happens within the .then() block of saveChat
-        return prevChats;
-    });
-
-
-  }, [currentMode, activeChatId, sortOrder]); // Removed savedChats dependency
+        // If this was a new chat, update the activeChatId to the real ID
+        if (isNewChat) {
+          setActiveChatId(finalChatId);
+        } else if (activeChatId === null) { // Handle case where app starts with no chats
+          setActiveChatId(finalChatId);
+        }
+      })
+      .catch(err => console.error(`Failed to save chat ${finalChatId}:`, err));
+  }, [currentMode, activeChatId, sortOrder, savedChats]); // Added savedChats dependency
 
   // Memoize the filtered, sorted, and searched chat list
   const displayedChats = useMemo(() => {
@@ -504,10 +502,9 @@ export default function Home() {
                        activeChatId={activeChatId}
                        initialMessages={activeChatMessages}
                        onMessagesUpdate={handleMessagesUpdate}
-                       // WalkthroughMode might also need settings/cwd depending on its implementation
-                       // settings={settings}
-                       // isLoadingSettings={isLoadingSettings}
-                       // cwd={cwd}
+                       settings={settings}
+                       isLoadingSettings={isLoadingSettings}
+                       cwd={cwd}
                    />
                 )}
              </motion.div>
