@@ -8,10 +8,12 @@ import { WalkthroughMode, ChatMessage, ApiProvider } from '@/components/modes/wa
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Settings, PlusCircle, Filter, SortAsc, SortDesc, Search, Trash2 } from 'lucide-react'; // Added Search and Trash2 icons
+import { Settings, PlusCircle, Filter, SortAsc, SortDesc, Search, Trash2, Edit2, Folder as FolderIcon, ChevronDown, ChevronRight, Plus } from 'lucide-react'; // Added more icons
 import { Button } from '@/components/ui/button';
 import Link from 'next/link';
-import { saveChat, deleteChat, SavedChat, generateChatId } from '@/lib/chat-storage'; // Removed unused getAllSavedChats
+import { saveChat, deleteChat, SavedChat, generateChatId, getAllSavedChats } from '@/lib/chat-storage';
+import { saveFolders, loadFolders, saveChatFolders, loadChatFolders, generateFolderId } from '@/lib/folder-storage';
+import { Folder } from '@/shared/models';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"; // Added Select imports
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils"; // Import cn utility
@@ -57,6 +59,27 @@ export default function Home() {
   const [filterMode, setFilterMode] = useState<'all' | 'action' | 'walkthrough'>('all'); // Filter state
   const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest'); // Sort state
   const [searchQuery, setSearchQuery] = useState<string>(''); // Search state
+  const [editingChatId, setEditingChatId] = useState<string | null>(null); // State for tracking which chat is being edited
+  const [editingChatName, setEditingChatName] = useState<string>(''); // State for the edited chat name
+  
+  // Folder state
+  interface Folder {
+    id: string;
+    name: string;
+    parentId: string | null;
+    isExpanded: boolean;
+  }
+  
+  const [folders, setFolders] = useState<Folder[]>([]);
+  const [chatFolders, setChatFolders] = useState<Record<string, string>>({});
+  const [showNewChatOptions, setShowNewChatOptions] = useState(false);
+  const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
+  const [editingFolderName, setEditingFolderName] = useState<string>('');
+  
+  // Drag and drop state
+  const [draggedChatId, setDraggedChatId] = useState<string | null>(null);
+  const [draggedFolderId, setDraggedFolderId] = useState<string | null>(null);
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   
   // State for mode switching
   const [previousMode, setPreviousMode] = useState<Mode | null>(null);
@@ -88,7 +111,7 @@ export default function Home() {
         try {
             // Load chats, settings, and CWD in parallel
             const [chats, loadedSettings, fetchedCwd] = await Promise.all([
-                invoke<SavedChat[]>('get_all_chats').catch(err => {
+                getAllSavedChats().catch(err => {
                     console.error("Failed to load chats:", err);
                     setInitialLoadError(`Failed to load chats: ${err instanceof Error ? err.message : String(err)}`);
                     return []; // Return empty array on error
@@ -145,6 +168,15 @@ export default function Home() {
     const timer = setTimeout(loadInitialData, 50);
     return () => clearTimeout(timer); // Cleanup timer
 
+    // Load folders and chat-folder mappings
+    const loadFolderData = () => {
+      const savedFolders = loadFolders();
+      const savedChatFolders = loadChatFolders();
+      setFolders(savedFolders);
+      setChatFolders(savedChatFolders);
+    };
+    
+    loadFolderData();
   }, []); // Empty dependency array ensures this runs only once on mount
 
 
@@ -162,44 +194,34 @@ export default function Home() {
 
   // Function to handle starting a new chat
   const handleNewChat = useCallback(() => {
-    // Generate a temporary ID for the new chat placeholder
-    const tempNewChatId = `new_${Date.now()}`;
+    // Generate a real ID for the new chat (not a temporary one)
+    const newChatId = generateChatId();
 
-    // Create a placeholder chat object
-    const placeholderChat: SavedChat = {
-      id: tempNewChatId,
+    // Create a new chat object
+    const newChat: SavedChat = {
+      id: newChatId,
       timestamp: Date.now(), // Use current time for sorting
       mode: currentMode, // Use the currently selected mode
       messages: [], // Start with empty messages
-      title: "New Chat", // Placeholder title
+      title: "New Chat", // Default title
     };
 
-    // Add the placeholder to the beginning of the list (or based on sort order)
-    // Ensure it doesn't duplicate if clicked rapidly
-    setSavedChats(prevChats => {
-        if (prevChats.some(chat => chat.id.startsWith('new_'))) {
-            // Avoid adding multiple "New Chat" placeholders if one exists
-            // Select the existing one instead
-            const existingNew = prevChats.find(chat => chat.id.startsWith('new_'));
-            if (existingNew) {
-                setActiveChatId(existingNew.id);
-                setActiveChatMessages(existingNew.messages);
-            }
-            return prevChats;
-        }
-        // Add the new placeholder based on sort order
-        // Always add to the top for visibility when creating a new chat
-        return [placeholderChat, ...prevChats];
-    });
+    // Save the new chat to the backend
+    saveChat(newChat)
+      .then(() => {
+        // Add the new chat to the state
+        setSavedChats(prevChats => {
+          // Always add to the top for visibility when creating a new chat
+          return [newChat, ...prevChats];
+        });
 
-    // Set the new chat as active
-    setActiveChatId(tempNewChatId);
-    setActiveChatMessages([]); // Clear messages for the new chat view
+        // Set the new chat as active
+        setActiveChatId(newChatId);
+        setActiveChatMessages([]);
+      })
+      .catch(err => console.error(`Failed to save new chat:`, err));
 
-    // Optionally reset mode, or keep the current one
-    // setCurrentMode('walkthrough');
-
-  }, [currentMode, sortOrder]); // Add dependencies
+  }, [currentMode]); // Dependencies
 
   // Function to handle deleting a chat
   const handleDeleteChat = useCallback((e: React.MouseEvent, chatId: string) => {
@@ -230,6 +252,141 @@ export default function Home() {
       })
       .catch(err => console.error(`Failed to delete chat ${chatId}:`, err));
   }, [activeChatId, handleSelectChat, sortOrder]); // Removed savedChats dependency as it's accessed via updater function
+
+  // Function to handle editing a chat name
+  const handleEditChat = useCallback((e: React.MouseEvent, chatId: string) => {
+    e.stopPropagation(); // Prevent triggering the chat selection
+    const chat = savedChats.find(c => c.id === chatId);
+    if (chat) {
+      setEditingChatId(chatId);
+      setEditingChatName(chat.title || '');
+    }
+  }, [savedChats]);
+
+  // Function to save the edited chat name
+  const handleSaveChatName = useCallback((chatId: string) => {
+    if (!editingChatName.trim()) {
+      setEditingChatId(null);
+      return;
+    }
+
+    const chatToUpdate = savedChats.find(c => c.id === chatId);
+    if (chatToUpdate) {
+      const updatedChat: SavedChat = {
+        ...chatToUpdate,
+        title: editingChatName.trim()
+      };
+
+      // Save the updated chat
+      saveChat(updatedChat)
+        .then(() => {
+          // Update the state after successful save
+          setSavedChats(prev => {
+            const updatedChats = prev.map(c =>
+              c.id === chatId ? { ...c, title: editingChatName.trim() } : c
+            );
+            return updatedChats;
+          });
+        })
+        .catch(err => console.error(`Failed to update chat name for ${chatId}:`, err))
+        .finally(() => {
+          // Reset editing state
+          setEditingChatId(null);
+          setEditingChatName('');
+        });
+    }
+  }, [savedChats, editingChatName]);
+
+  // Function to handle key press in the edit input
+  const handleEditKeyPress = useCallback((e: React.KeyboardEvent, chatId: string) => {
+    if (e.key === 'Enter') {
+      handleSaveChatName(chatId);
+    } else if (e.key === 'Escape') {
+      setEditingChatId(null);
+      setEditingChatName('');
+    }
+  }, [handleSaveChatName]);
+  
+  // Drag and drop handlers
+  const handleDragStart = useCallback((e: React.DragEvent, id: string, type: 'chat' | 'folder') => {
+    e.dataTransfer.setData('text/plain', id);
+    e.dataTransfer.setData('type', type);
+    if (type === 'chat') {
+      setDraggedChatId(id);
+    } else {
+      setDraggedFolderId(id);
+    }
+  }, []);
+  
+  const handleDragOver = useCallback((e: React.DragEvent, id: string, type: 'folder' | 'root') => {
+    e.preventDefault();
+    if (type === 'folder') {
+      setDropTargetId(id);
+    } else {
+      setDropTargetId('root');
+    }
+  }, []);
+  
+  const handleDragEnd = useCallback(() => {
+    setDraggedChatId(null);
+    setDraggedFolderId(null);
+    setDropTargetId(null);
+  }, []);
+  
+  // Save folders whenever they change
+  useEffect(() => {
+    saveFolders(folders);
+  }, [folders]);
+  
+  // Save chat-folder mappings whenever they change
+  useEffect(() => {
+    saveChatFolders(chatFolders);
+  }, [chatFolders]);
+  
+  const handleDrop = useCallback((e: React.DragEvent, targetId: string, type: 'folder' | 'root') => {
+    e.preventDefault();
+    const id = e.dataTransfer.getData('text/plain');
+    const itemType = e.dataTransfer.getData('type');
+    
+    if (itemType === 'chat') {
+      // Moving a chat
+      if (type === 'folder') {
+        // Move chat to folder
+        setChatFolders(prev => ({
+          ...prev,
+          [id]: targetId
+        }));
+      } else if (type === 'root') {
+        // Move chat to root (remove from folder)
+        setChatFolders(prev => {
+          const newMapping = {...prev};
+          delete newMapping[id];
+          return newMapping;
+        });
+      }
+    } else if (itemType === 'folder') {
+      // Moving a folder
+      if (type === 'folder' && id !== targetId) {
+        // Move folder to another folder (create subfolder)
+        setFolders(prev =>
+          prev.map(folder =>
+            folder.id === id ? {...folder, parentId: targetId} : folder
+          )
+        );
+      } else if (type === 'root') {
+        // Move folder to root
+        setFolders(prev =>
+          prev.map(folder =>
+            folder.id === id ? {...folder, parentId: null} : folder
+          )
+        );
+      }
+    }
+    
+    setDraggedChatId(null);
+    setDraggedFolderId(null);
+    setDropTargetId(null);
+  }, []);
 
   // Callback function for WalkthroughMode to update messages and trigger save
   const handleMessagesUpdate = useCallback((updatedMessages: ChatMessage[], chatIdToSave: string) => {
@@ -351,9 +508,70 @@ export default function Home() {
       <aside className="w-80 flex flex-col bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">
         <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
             <h1 className="text-xl font-semibold">AIT</h1>
-            <Button variant="ghost" size="sm" onClick={handleNewChat} aria-label="New Chat">
-                <PlusCircle className="h-5 w-5" />
-            </Button>
+            <div
+              className="relative"
+            >
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  handleNewChat();
+                  setShowNewChatOptions(false);
+                }}
+                aria-label="New Chat"
+              >
+                <Plus className="h-5 w-5" />
+              </Button>
+              
+              {/* Dropdown menu for new chat/folder */}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowNewChatOptions(!showNewChatOptions)}
+                aria-label="Show Options"
+              >
+                <ChevronDown className="h-4 w-4" />
+              </Button>
+              
+              {showNewChatOptions && (
+                <div
+                  className="absolute right-0 mt-1 w-40 bg-white dark:bg-gray-800 rounded-md shadow-lg z-50 border border-gray-200 dark:border-gray-700"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <Button
+                    variant="ghost"
+                    className="w-full justify-start text-sm px-3 py-2"
+                    onClick={() => {
+                      handleNewChat();
+                      setShowNewChatOptions(false);
+                    }}
+                  >
+                    <PlusCircle className="h-4 w-4 mr-2" />
+                    New Chat
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    className="w-full justify-start text-sm px-3 py-2"
+                    onClick={() => {
+                      // Create a new folder
+                      const newFolderId = generateFolderId();
+                      setFolders([...folders, {
+                        id: newFolderId,
+                        name: 'New Folder',
+                        parentId: null,
+                        isExpanded: true
+                      }]);
+                      setEditingFolderId(newFolderId);
+                      setEditingFolderName('New Folder');
+                      setShowNewChatOptions(false);
+                    }}
+                  >
+                    <FolderIcon className="h-4 w-4 mr-2" />
+                    New Folder
+                  </Button>
+                </div>
+              )}
+            </div>
         </div>
         {/* Removed erroneous ScrollArea tag */}
         <ScrollArea className="flex-1">
@@ -397,6 +615,196 @@ export default function Home() {
             </div>
 
             {/* Chat List */}
+            {/* Folders first */}
+            {folders.filter(folder => folder.parentId === null).map((folder) => (
+              <div
+                key={folder.id}
+                className={cn(
+                  "mb-2",
+                  dropTargetId === folder.id ? 'ring-2 ring-blue-500 rounded-md' : ''
+                )}
+                onDragOver={(e) => handleDragOver(e, folder.id, 'folder')}
+                onDrop={(e) => handleDrop(e, folder.id, 'folder')}
+              >
+                <div
+                  className={cn(
+                    "group relative",
+                    draggedFolderId === folder.id ? 'opacity-50' : ''
+                  )}
+                  draggable
+                  onDragStart={(e) => handleDragStart(e, folder.id, 'folder')}
+                  onDragEnd={handleDragEnd}
+                >
+                  {/* Folder header with expand/collapse */}
+                  <div className="flex items-center">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6 p-0"
+                      onClick={() => {
+                        setFolders(folders.map(f =>
+                          f.id === folder.id ? {...f, isExpanded: !f.isExpanded} : f
+                        ));
+                      }}
+                    >
+                      {folder.isExpanded ?
+                        <ChevronDown className="h-4 w-4" /> :
+                        <ChevronRight className="h-4 w-4" />
+                      }
+                    </Button>
+                    
+                    {editingFolderId === folder.id ? (
+                      // Editing folder name
+                      <Input
+                        value={editingFolderName}
+                        onChange={(e) => setEditingFolderName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            setFolders(folders.map(f =>
+                              f.id === folder.id ? {...f, name: editingFolderName} : f
+                            ));
+                            setEditingFolderId(null);
+                          } else if (e.key === 'Escape') {
+                            setEditingFolderId(null);
+                          }
+                        }}
+                        onBlur={() => {
+                          setFolders(folders.map(f =>
+                            f.id === folder.id ? {...f, name: editingFolderName} : f
+                          ));
+                          setEditingFolderId(null);
+                        }}
+                        autoFocus
+                        className="h-7 text-sm ml-1 flex-1"
+                      />
+                    ) : (
+                      <Button
+                        variant="ghost"
+                        className="h-7 flex-1 justify-start text-sm px-2"
+                        onClick={() => {
+                          setFolders(folders.map(f =>
+                            f.id === folder.id ? {...f, isExpanded: !f.isExpanded} : f
+                          ));
+                        }}
+                      >
+                        <FolderIcon className="h-4 w-4 mr-2 text-gray-500" />
+                        <span className="font-medium">{folder.name}</span>
+                      </Button>
+                    )}
+                    
+                    {/* Folder action buttons */}
+                    <div className="opacity-0 group-hover:opacity-100 transition-opacity flex">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditingFolderId(folder.id);
+                          setEditingFolderName(folder.name);
+                        }}
+                      >
+                        <Edit2 className="h-3 w-3 text-gray-500 hover:text-blue-500" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          // Delete folder and move all chats to root
+                          const updatedChatFolders = {...chatFolders};
+                          Object.keys(updatedChatFolders).forEach(chatId => {
+                            if (updatedChatFolders[chatId] === folder.id) {
+                              delete updatedChatFolders[chatId];
+                            }
+                          });
+                          setChatFolders(updatedChatFolders);
+                          setFolders(folders.filter(f => f.id !== folder.id));
+                        }}
+                      >
+                        <Trash2 className="h-3 w-3 text-gray-500 hover:text-red-500" />
+                      </Button>
+                    </div>
+                  </div>
+                  
+                  {/* Folder contents */}
+                  {folder.isExpanded && (
+                    <div className="pl-6 mt-1 space-y-1">
+                      {/* Chats in this folder */}
+                      {displayedChats
+                        .filter(chat => chatFolders[chat.id] === folder.id)
+                        .map((chat) => (
+                          <div key={chat.id} className="group relative mb-1">
+                            {/* Action buttons on the right */}
+                            <div className="absolute top-1/2 right-1 -translate-y-1/2 flex opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                              {/* Edit button */}
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-6 w-6 flex-shrink-0"
+                                onClick={(e) => handleEditChat(e, chat.id)}
+                                aria-label="Edit chat name"
+                              >
+                                <Edit2 className="h-3 w-3 text-gray-500 hover:text-blue-500" />
+                              </Button>
+                              
+                              {/* Delete button */}
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-6 w-6 flex-shrink-0"
+                                onClick={(e) => handleDeleteChat(e, chat.id)}
+                                aria-label="Delete chat"
+                              >
+                                <Trash2 className="h-3 w-3 text-gray-500 hover:text-red-500" />
+                              </Button>
+                            </div>
+                            
+                            {/* Chat content */}
+                            <div className="pt-1">
+                              {editingChatId === chat.id ? (
+                                // Editing mode
+                                <div className="w-full">
+                                  <Input
+                                    value={editingChatName}
+                                    onChange={(e) => setEditingChatName(e.target.value)}
+                                    onKeyDown={(e) => handleEditKeyPress(e, chat.id)}
+                                    onBlur={() => handleSaveChatName(chat.id)}
+                                    autoFocus
+                                    className="h-7 text-sm"
+                                  />
+                                </div>
+                              ) : (
+                                // Display mode
+                                <Button
+                                  variant="ghost"
+                                  className={cn(
+                                    "w-full justify-start text-sm h-7 py-1 px-2 text-left",
+                                    chat.id === activeChatId ? 'bg-gray-200 dark:bg-gray-700' : '',
+                                    draggedChatId === chat.id ? 'opacity-50' : ''
+                                  )}
+                                  onClick={() => handleSelectChat(chat.id)}
+                                  data-testid={`chat-button-${chat.id}`}
+                                  draggable
+                                  onDragStart={(e) => handleDragStart(e, chat.id, 'chat')}
+                                  onDragEnd={handleDragEnd}
+                                >
+                                  <span className="font-medium truncate block">
+                                    {chat.title || (chat.id.startsWith('new_') ? 'New Chat' : `Chat ${chat.id.substring(0, 8)}`)}
+                                  </span>
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+            
+            {/* Chats not in folders */}
             {isLoadingChats ? (
               <div className="text-sm text-gray-400 dark:text-gray-500">Loading chats...</div>
             ) : displayedChats.length === 0 ? (
@@ -404,34 +812,81 @@ export default function Home() {
                 {searchQuery ? 'No matching chats found.' : (filterMode === 'all' ? 'No past chats found.' : `No ${filterMode} chats found.`)}
               </div>
             ) : (
-              displayedChats.map((chat) => (
-                <div key={chat.id} className="group">
-                  <div className="flex items-center">
-                    <Button
-                      variant="ghost"
-                      className={cn(
-                        "w-[calc(100%-24px)] justify-start text-sm h-auto py-2 px-2 text-left", // Added px-2 and text-left
-                        chat.id === activeChatId ? 'bg-gray-200 dark:bg-gray-700' : ''
+              <div
+                className={cn(
+                  "mt-4",
+                  dropTargetId === 'root' ? 'ring-2 ring-blue-500 rounded-md p-1' : ''
+                )}
+                onDragOver={(e) => handleDragOver(e, 'root', 'root')}
+                onDrop={(e) => handleDrop(e, 'root', 'root')}
+              >
+                {displayedChats
+                  .filter(chat => !chatFolders[chat.id]) // Only show chats not in folders
+                  .map((chat) => (
+                  <div key={chat.id} className="group relative mb-3">
+                    {/* Action buttons on the right */}
+                    <div className="absolute top-1/2 right-1 -translate-y-1/2 flex opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                      {/* Edit button */}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 flex-shrink-0"
+                        onClick={(e) => handleEditChat(e, chat.id)}
+                        aria-label="Edit chat name"
+                      >
+                        <Edit2 className="h-4 w-4 text-gray-500 hover:text-blue-500" />
+                      </Button>
+                      
+                      {/* Delete button */}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 flex-shrink-0"
+                        onClick={(e) => handleDeleteChat(e, chat.id)}
+                        aria-label="Delete chat"
+                      >
+                        <Trash2 className="h-4 w-4 text-gray-500 hover:text-red-500" />
+                      </Button>
+                    </div>
+                    
+                    {/* Chat content */}
+                    <div className="pt-1">
+                      {editingChatId === chat.id ? (
+                        // Editing mode
+                        <div className="w-full">
+                          <Input
+                            value={editingChatName}
+                            onChange={(e) => setEditingChatName(e.target.value)}
+                            onKeyDown={(e) => handleEditKeyPress(e, chat.id)}
+                            onBlur={() => handleSaveChatName(chat.id)}
+                            autoFocus
+                            className="h-8 text-sm"
+                          />
+                        </div>
+                      ) : (
+                        // Display mode
+                        <Button
+                          variant="ghost"
+                          className={cn(
+                            "w-full justify-start text-sm h-auto py-2 px-2 text-left",
+                            chat.id === activeChatId ? 'bg-gray-200 dark:bg-gray-700' : '',
+                            draggedChatId === chat.id ? 'opacity-50' : ''
+                          )}
+                          onClick={() => handleSelectChat(chat.id)}
+                          data-testid={`chat-button-${chat.id}`}
+                          draggable
+                          onDragStart={(e) => handleDragStart(e, chat.id, 'chat')}
+                          onDragEnd={handleDragEnd}
+                        >
+                          <span className="font-medium truncate block">
+                            {chat.title || (chat.id.startsWith('new_') ? 'New Chat' : `Chat ${chat.id.substring(0, 8)}`)}
+                          </span>
+                        </Button>
                       )}
-                      onClick={() => handleSelectChat(chat.id)}
-                      data-testid={`chat-button-${chat.id}`} // Add data-testid using chat ID
-                    >
-                      <span className="font-medium truncate block"> {/* Use block for better truncation */}
-                        {chat.title || (chat.id.startsWith('new_') ? 'New Chat' : `Chat ${chat.id.substring(0, 8)}`)} {/* Ensure placeholder shows 'New Chat' */}
-                      </span>
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6 ml-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" // Added flex-shrink-0
-                      onClick={(e) => handleDeleteChat(e, chat.id)}
-                      aria-label="Delete chat"
-                    >
-                      <Trash2 className="h-4 w-4 text-gray-500 hover:text-red-500" />
-                    </Button>
+                    </div>
                   </div>
-                </div>
-              ))
+                  ))}
+              </div>
             )}
           </div>
         </ScrollArea>
@@ -476,10 +931,8 @@ export default function Home() {
                             )}
                         >
                             {currentMode === mode.id && (
-                                <motion.div
-                                    layoutId="modeHighlight"
+                                <div
                                     className="absolute inset-0 h-full bg-white dark:bg-black rounded-full -z-10"
-                                    transition={{ type: "spring", stiffness: 300, damping: 30 }}
                                 />
                             )}
                             {mode.label}
@@ -491,8 +944,8 @@ export default function Home() {
 
 
         {/* Chat Interface Area */}
-        <div className="flex-1 overflow-hidden flex p-4 md:p-6 lg:p-8 pt-20"> {/* Added padding-top */}
-           <div className="w-full h-full flex">
+        <div className="flex-1 overflow-hidden flex p-4 md:p-6 lg:p-8 pt-20 pb-4"> {/* Added padding-top and bottom */}
+           <div className="w-full h-full flex flex-col justify-between">
               {currentMode === 'action' ? (
                  <ActionMode
                      activeChatId={activeChatId}

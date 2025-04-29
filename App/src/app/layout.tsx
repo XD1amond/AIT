@@ -3,6 +3,7 @@ import React from 'react';
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { cn } from "@/lib/utils";
+import { Toaster } from 'sonner';
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
 
@@ -29,6 +30,23 @@ export default function RootLayout({
           inter.variable
         )}
       >
+        <Toaster
+          richColors
+          position="top-center"
+          expand={false}
+          toastOptions={{
+            error: {
+              style: {
+                background: 'rgb(220, 38, 38)',
+                color: 'white',
+                border: '1px solid rgb(248, 113, 113)',
+                boxShadow: '0 4px 6px -1px rgba(220, 38, 38, 0.2), 0 2px 4px -1px rgba(220, 38, 38, 0.1)',
+                fontWeight: '500',
+              },
+              icon: '🚫',
+            },
+          }}
+        />
         {children} {/* Render children directly */}
       </body>
     </html>

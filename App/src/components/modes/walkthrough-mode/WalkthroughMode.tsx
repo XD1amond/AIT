@@ -1,18 +1,14 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion } from 'framer-motion';
-import { Send } from 'lucide-react';
 import { getSystemInfoPrompt } from '../../../prompts/sections/system-info';
 import { getWalkthroughModePrompt } from '@/prompts/modes/walkthrough-mode';
-import { saveChat, generateChatId, SavedChat } from '../../../lib/chat-storage';
-import { ToolApproval } from '@/components/ui/tool-approval';
+import { generateChatId } from '../../../lib/chat-storage';
 import { ToolUse, ToolResponse, ToolProgressStatus } from '@/prompts/tools/types';
 import { parseToolUse, containsToolUse, extractTextAroundToolUse } from '@/prompts/tools/tool-parser';
 import { executeTool, isToolEnabled, shouldAutoApprove, isCommandWhitelisted, isCommandBlacklisted, ToolSettings } from '@/prompts/tools';
+import { ChatComponent, ChatMessage, showErrorToast } from '@/components/shared/ChatComponent';
 
 // Define ApiProvider type locally
 export type ApiProvider = 'openai' | 'claude' | 'openrouter' | 'gemini' | 'deepseek';
@@ -57,13 +53,8 @@ interface AppSettings {
     theme: string;
 }
 
-export interface ChatMessage {
-    id: string; // Add ID for better key management and consistency
-    sender: 'user' | 'ai';
-    content: string;
-    toolUse?: ToolUse; // For tool-related messages
-    type?: 'user' | 'ai' | 'error' | 'tool-request' | 'tool-response' | 'status'; // Add type for styling
-}
+// Re-export ChatMessage for other components to use
+export type { ChatMessage } from '@/components/shared/ChatComponent';
 
 // Props definition
 interface WalkthroughModeProps {
@@ -182,7 +173,7 @@ async function callLlmApi(
     if (!response.ok) {
       const errorBody = await response.text();
       console.error(`API Error (${response.status}):`, errorBody);
-      return `Error: API request failed with status ${response.status}. Check console for details. Ensure the correct API key is set.`;
+      return `Error: API request failed with status ${response.status}. Ensure the correct API key is set.`;
     }
 
     const data = await response.json();
@@ -258,28 +249,12 @@ export function WalkthroughMode({
   // Effect to handle mode switching
   useEffect(() => {
     if (isModeSwitching && previousMode !== 'walkthrough' && internalChatId) {
-      // Add a system message indicating the mode switch
-      const modeSwitchMessage: ChatMessage = {
-        id: `msg_${Date.now()}_mode_switch`,
-        sender: 'ai',
-        content: 'Mode switched to Walkthrough Mode. I will now guide you through tasks step-by-step without executing commands for you.',
-        type: 'status'
-      };
-      
-      // Update messages with the mode switch notification
-      const updatedMessages = [...initialMessages, modeSwitchMessage];
-      
-      // Save the updated messages directly
-      if (internalChatId) {
-        onMessagesUpdate(updatedMessages, internalChatId);
-      }
-      
-      // Notify parent that mode switch is complete
+      // Notify parent that mode switch is complete without adding a message
       if (onModeSwitchComplete) {
         onModeSwitchComplete();
       }
     }
-  }, [isModeSwitching, previousMode, internalChatId, initialMessages, onMessagesUpdate, onModeSwitchComplete]);
+  }, [isModeSwitching, previousMode, internalChatId, onModeSwitchComplete]);
 
   // Effect to fetch system data and settings - runs when internalChatId is set/changes
   useEffect(() => {
@@ -463,14 +438,8 @@ export function WalkthroughMode({
     setPendingToolUse(null);
     
     if (!approved) {
-        // Add rejection message
-        const rejectionMessage: ChatMessage = {
-            id: `msg_${Date.now()}_reject`, // Add ID
-            sender: 'ai',
-            content: 'Tool use rejected by user.',
-            type: 'error' // Add type
-        };
-        onMessagesUpdate([...initialMessages, rejectionMessage], internalChatId);
+        // Add rejection message as toast
+        showErrorToast('Tool use rejected by user.');
         setIsLoading(false);
         return;
     }
@@ -506,17 +475,14 @@ export function WalkthroughMode({
     try {
         // Check if the tool is enabled for walkthrough mode
         if (!isToolEnabled(toolUse.name, 'walkthrough', getToolSettings())) {
-            const errorMessage: ChatMessage = {
-                id: `msg_${Date.now()}_tool_disabled`, // Add ID
-                sender: 'ai',
-                content: `Tool '${toolUse.name}' is not enabled for walkthrough mode.`,
-                type: 'error' // Add type
-            };
-            onMessagesUpdate([...initialMessages, errorMessage], internalChatId);
+            showErrorToast({
+                title: 'Tool Not Enabled',
+                description: `Tool '${toolUse.name}' is not enabled for walkthrough mode.`
+            });
             setIsLoading(false);
             setToolProgress(null);
-        return;
-      }
+            return;
+        }
       
       // Special handling for command tool
       if (toolUse.name === 'command' && toolUse.params.command && typeof toolUse.params.command === 'string') {
@@ -524,18 +490,15 @@ export function WalkthroughMode({
         
             // Check blacklist first (blacklist overrides whitelist)
             if (isCommandBlacklisted(command, getToolSettings())) {
-                const errorMessage: ChatMessage = {
-                    id: `msg_${Date.now()}_cmd_blacklisted`, // Add ID
-                    sender: 'ai',
-                    content: `Command '${command}' is blacklisted and cannot be executed.`,
-                    type: 'error' // Add type
-                };
-                onMessagesUpdate([...initialMessages, errorMessage], internalChatId);
+                showErrorToast({
+                    title: 'Command Blacklisted',
+                    description: `Command '${command}' is blacklisted and cannot be executed.`
+                });
                 setIsLoading(false);
                 setToolProgress(null);
-          return;
+                return;
+            }
         }
-      }
       
       // Execute the tool
       const result = await executeTool(
@@ -564,15 +527,10 @@ export function WalkthroughMode({
       // Continue with AI response after tool execution
       await continueConversation(updatedMessages);
     } catch (error) {
-        // Add error message
-        const errorContent = `Error executing tool: ${error instanceof Error ? error.message : String(error)}`;
-        const errorMessage: ChatMessage = {
-            id: `msg_${Date.now()}_tool_exec_err`, // Add ID
-            sender: 'ai',
-            content: errorContent,
-            type: 'error' // Add type
-        };
-        onMessagesUpdate([...initialMessages, errorMessage], internalChatId);
+        showErrorToast({
+            title: 'Tool Execution Error',
+            description: error instanceof Error ? error.message : String(error)
+        });
         setIsLoading(false);
     } finally {
       setToolProgress(null);
@@ -610,14 +568,10 @@ export function WalkthroughMode({
     }
     
     if (!apiKey) {
-        const errorMsg = `API key for selected provider (${provider}) is missing. Please check Settings.`;
-        const errorAiMessage: ChatMessage = {
-            id: `msg_${Date.now()}_api_key_err`, // Add ID
-            sender: 'ai',
-            content: errorMsg,
-            type: 'error' // Add type
-        };
-        onMessagesUpdate([...currentMessages, errorAiMessage], internalChatId);
+        showErrorToast({
+            title: 'API Key Missing',
+            description: `API key for selected provider (${provider}) is missing. Please check Settings.`
+        });
         setIsLoading(false);
         return;
     }
@@ -647,6 +601,7 @@ export function WalkthroughMode({
             
             // Check blacklist first (blacklist overrides whitelist)
             if (isCommandBlacklisted(command, getToolSettings())) {
+              // Don't show toast, just return the error for the message
               return {
                 success: false,
                 error: `Command '${command}' is blacklisted and cannot be executed.`,
@@ -676,18 +631,28 @@ export function WalkthroughMode({
       );
       
       if (typeof aiResponse === 'string') {
-                // Regular text response
-                const newAiMessage: ChatMessage = {
-                    id: `msg_${Date.now()}_ai`, // Add ID
-                    sender: 'ai',
-                    content: aiResponse,
-                    type: 'ai' // Add type
-                };
-                onMessagesUpdate([...currentMessages, newAiMessage], internalChatId);
-                setIsLoading(false);
-            } else {
-                // Tool use response
-                const { content, toolUse } = aiResponse;
+          // Check if the string response is actually an error message
+          if (aiResponse.startsWith("Error:")) {
+              // Parse the error string into title and description
+              const errorParts = aiResponse.split('.');
+              const title = errorParts[0]?.trim() || 'API Error';
+              const description = errorParts.slice(1).join('.').trim() || 'An unknown API error occurred.';
+              showErrorToast({ title, description });
+              setIsLoading(false);
+          } else {
+              // Regular text response
+              const newAiMessage: ChatMessage = {
+                  id: `msg_${Date.now()}_ai`, // Add ID
+                  sender: 'ai',
+                  content: aiResponse,
+                  type: 'ai' // Add type
+              };
+              onMessagesUpdate([...currentMessages, newAiMessage], internalChatId);
+              setIsLoading(false);
+          }
+      } else {
+          // Tool use response
+          const { content, toolUse } = aiResponse;
                 let intermediateMessages = [...currentMessages];
 
                 // Add AI's explanation before the tool use
@@ -736,14 +701,10 @@ export function WalkthroughMode({
       }
     } catch (error) {
         console.error("LLM API call failed in continueConversation:", error);
-        const errorContent = `Sorry, I encountered an error trying to respond. (${error instanceof Error ? error.message : String(error)})`;
-        const errorAiMessage: ChatMessage = {
-            id: `msg_${Date.now()}_llm_err`, // Add ID
-            sender: 'ai',
-            content: errorContent,
-            type: 'error' // Add type
-        };
-        onMessagesUpdate([...currentMessages, errorAiMessage], internalChatId);
+        showErrorToast({
+            title: 'AI Response Error',
+            description: `Sorry, I encountered an error trying to respond. (${error instanceof Error ? error.message : String(error)})`
+        });
         setIsLoading(false);
     }
   };
@@ -760,24 +721,18 @@ export function WalkthroughMode({
     
     // If settings are not loaded or there's an error, show error message
     if (!currentSettings) {
-        const errorMessage: ChatMessage = {
-            id: `msg_${Date.now()}_settings_err1`, // Add ID
-            sender: 'ai',
-            content: 'Settings not loaded. Please try again.',
-            type: 'error' // Add type
-        };
-        onMessagesUpdate([...initialMessages, errorMessage], internalChatId);
+        showErrorToast({
+            title: 'Settings Error',
+            description: 'Settings not loaded. Please try again.'
+        });
         return;
     }
 
     if (settingsError) {
-        const errorMessage: ChatMessage = {
-            id: `msg_${Date.now()}_settings_err2`, // Add ID
-            sender: 'ai',
-            content: `Error with settings: ${settingsError}. Please check your settings.`,
-            type: 'error' // Add type
-        };
-        onMessagesUpdate([...initialMessages, errorMessage], internalChatId);
+        showErrorToast({
+            title: 'Settings Error',
+            description: `${settingsError}. Please check your settings.`
+        });
         return;
     }
 
@@ -812,116 +767,18 @@ export function WalkthroughMode({
 
   // Render the component
   return (
-    <motion.div
-      // Use key to force re-mount when chat ID changes, ensuring state reset
-      key={internalChatId || 'new'}
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3 }}
-      className="w-full h-full flex flex-col p-4"
-    >
-      {/* Message Area */}
-      <ScrollArea className="flex-grow mb-4 pr-4 -mr-4">
-        <div ref={viewportRef} className="space-y-4">
-          {/* Render messages from initialMessages prop */}
-          {initialMessages.map((msg, index) => (
-            <div
-                // Use message ID for key
-                key={msg.id}
-                className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
-            >
-                <motion.div
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.3 }}
-                    // Apply styling based on sender and type, matching ActionMode
-                    className={`max-w-[80%] p-3 rounded-lg text-sm ${ // Added text-sm for consistency
-                        msg.sender === 'user'
-                            ? 'bg-blue-600 text-white' // User message style
-                            : msg.type === 'error' // Check type for specific styling
-                            ? 'bg-red-100 dark:bg-red-900/50 text-red-900 dark:text-red-200' // Error style
-                            : msg.type === 'tool-request'
-                            ? 'bg-amber-100 dark:bg-amber-900/50 text-amber-900 dark:text-amber-200' // Tool request style
-                            : msg.type === 'tool-response'
-                            ? 'bg-green-100 dark:bg-green-900/50 text-green-900 dark:text-green-200' // Tool response style
-                            : 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100' // Default AI/Status style
-                    }`}
-                >
-                    {/* Render newlines correctly */}
-                    {msg.content.split('\n').map((line, i) => (
-                  <p key={i} style={{ minHeight: '1em' }}>{line || '\u00A0'}</p>
-                ))}
-              </motion.div>
-            </div>
-          ))}
-           {isLoading && !toolProgress && (
-             <div className="flex justify-start">
-                <motion.div
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.3 }}
-                  className="max-w-[80%] p-3 rounded-lg bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 animate-pulse"
-                >
-                    Thinking...
-                </motion.div>
-             </div>
-           )}
-           {toolProgress && (
-             <div className="flex justify-start">
-                <motion.div
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.3 }}
-                  className="max-w-[80%] p-3 rounded-lg bg-blue-100 dark:bg-blue-900/50 text-blue-900 dark:text-blue-200"
-                >
-                  <div className="flex items-center">
-                    <div className="mr-2 h-4 w-4 rounded-full bg-blue-500 animate-pulse"></div>
-                    <p>{toolProgress.message || 'Executing tool...'}</p>
-                  </div>
-                  {toolProgress.progress !== undefined && (
-                    <div className="w-full bg-gray-200 rounded-full h-2.5 mt-2">
-                      <div 
-                        className="bg-blue-600 h-2.5 rounded-full" 
-                        style={{ width: `${toolProgress.progress}%` }}
-                      ></div>
-                    </div>
-                  )}
-                </motion.div>
-             </div>
-           )}
-        </div>
-      </ScrollArea>
-
-      {/* Tool Approval Dialog */}
-      {pendingToolUse && (
-        <ToolApproval
-          toolUse={pendingToolUse}
-          onApprove={() => handleToolApproval(true)}
-          onReject={() => handleToolApproval(false)}
-          isOpen={!!pendingToolUse}
-        />
-      )}
-
-      {/* Input Bar */}
-      <div className="flex space-x-2 items-center border-t pt-4">
-        <Input
-          placeholder="Type your problem..."
-          value={userInput}
-          onChange={(e) => setUserInput(e.target.value)}
-          onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
-          disabled={isLoading} // Only disable if loading
-          className="flex-1 h-12"
-          aria-label="Chat input"
-        />
-        <Button
-            onClick={handleSendMessage}
-            disabled={isLoading || !userInput.trim()} // Only disable if loading or no input
-            className="h-12 w-12"
-            aria-label="Send message"
-        >
-          <Send className="h-5 w-5" />
-        </Button>
-      </div>
-    </motion.div>
+    <div key={internalChatId || 'new'} className="h-full flex flex-col">
+      <ChatComponent
+        messages={initialMessages}
+        isLoading={isLoading}
+        userInput={userInput}
+        setUserInput={setUserInput}
+        handleSendMessage={handleSendMessage}
+        pendingToolUse={pendingToolUse}
+        handleToolApproval={handleToolApproval}
+        toolProgress={toolProgress}
+        inputPlaceholder="Type your problem..."
+      />
+    </div>
   );
 }

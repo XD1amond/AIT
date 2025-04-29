@@ -93,6 +93,9 @@ pub fn run() {
             crate::commands::save_settings,
             crate::commands::execute_command,
             crate::commands::web_search,
+            crate::commands::get_all_chats,
+            crate::commands::save_chat,
+            crate::commands::delete_chat,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -456,3 +456,11 @@ export const isRouterName = (value: string): value is RouterName => routerNames.
 export type ModelRecord = Record<string, ModelInfo>
 
 export type RouterModels = Record<RouterName, ModelRecord>
+
+// Folder interface for chat organization
+export interface Folder {
+  id: string;
+  name: string;
+  parentId: string | null;
+  isExpanded: boolean;
+}

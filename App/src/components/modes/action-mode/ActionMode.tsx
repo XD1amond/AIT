@@ -1,31 +1,13 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { Send } from 'lucide-react';
-import { ToolApproval } from '@/components/ui/tool-approval';
 import { getSystemInfoPrompt } from '@/prompts/sections/system-info';
 import { ToolUse, ToolResponse, ToolProgressStatus } from '@/prompts/tools/types';
 import { parseToolUse, containsToolUse, extractTextAroundToolUse } from '@/prompts/tools/tool-parser';
 import { executeTool, isToolEnabled, shouldAutoApprove, isCommandWhitelisted, isCommandBlacklisted, ToolSettings } from '@/prompts/tools';
-
-// Re-use ChatMessage type from WalkthroughMode for consistency
-import { ChatMessage } from '@/components/modes/walkthrough-mode/WalkthroughMode';
-
-// Define a type for messages in Action Mode (can potentially reuse ChatMessage if structure aligns)
-// For now, let's keep ActionMessage specific if needed, but aim for consolidation
-interface ActionMessage {
-    id: string; // Use string ID like ChatMessage
-    type: 'task' | 'status' | 'result' | 'error' | 'tool-request' | 'tool-response' | 'user' | 'ai'; // Align types?
-    content: string;
-    toolUse?: ToolUse; // For tool-request messages
-    // Add sender if consolidating with ChatMessage
-    sender?: 'user' | 'ai';
-}
-
+import { ChatComponent, ChatMessage, showErrorToast } from '@/components/shared/ChatComponent';
+import { getActionModePrompt } from '@/prompts/modes/action-mode';
 
 // Props for Action Mode, similar to WalkthroughMode
 interface ActionModeProps {
@@ -63,8 +45,6 @@ interface AppSettings {
   [key: string]: any;
 }
 
-// Import the mode prompts
-import { getActionModePrompt } from '@/prompts/modes/action-mode';
 
 // Accept props
 export function ActionMode({
@@ -91,28 +71,27 @@ export function ActionMode({
 
   // Use activeChatId to reset messages when chat changes
   useEffect(() => {
+      // Always update messages from initialMessages
       setMessages(initialMessages);
+      
       // Reset other relevant state if needed when chat switches
       setIsLoading(false);
       setPendingToolUse(null);
       setToolProgress(null);
       setTask(''); // Clear input when chat changes
+      
+      // If activeChatId is null, this is a new chat
+      if (!activeChatId) {
+          console.log("ActionMode: New chat detected");
+      } else {
+          console.log(`ActionMode: Switched to chat ID: ${activeChatId}`);
+      }
   }, [activeChatId, initialMessages]);
 
   // Effect to handle mode switching
   useEffect(() => {
       if (isModeSwitching && previousMode !== 'action') {
-          // Add a system message indicating the mode switch
-          const modeSwitchMessage: ChatMessage = {
-              id: `msg_${Date.now()}_mode_switch`,
-              sender: 'ai',
-              content: 'Mode switched to Action Mode. I can now execute commands and use tools on your behalf.',
-              type: 'status'
-          };
-          
-          setMessages(prev => [...prev, modeSwitchMessage]);
-          
-          // Notify parent that mode switch is complete
+          // Notify parent that mode switch is complete without adding a message
           if (onModeSwitchComplete) {
               onModeSwitchComplete();
           }
@@ -121,20 +100,11 @@ export function ActionMode({
 
   // Remove internal ID generation if ChatMessage provides it
   // const nextId = useRef(0);
-  const viewportRef = useRef<HTMLDivElement>(null); // For scrolling
+  // No need for viewportRef as it's handled by ChatComponent
 
   // Remove internal settings/CWD fetching useEffect
 
-  // Scroll to bottom when messages change
-  useEffect(() => {
-    const element = viewportRef.current;
-    if (element) {
-      // Use requestAnimationFrame for smoother scrolling after render
-      requestAnimationFrame(() => {
-        element.scrollTop = element.scrollHeight;
-      });
-    }
-  }, [messages]);
+  // Scroll to bottom is now handled by ChatComponent
 
   // Get tool settings from app settings
   const getToolSettings = (): ToolSettings => {
@@ -191,20 +161,10 @@ export function ActionMode({
     try {
       // Check if the tool is enabled for action mode
       if (!isToolEnabled(toolUse.name, 'action', getToolSettings())) {
-        const errorMessage = `Tool '${toolUse.name}' is not enabled for action mode.`;
-        const updatedMessages: ChatMessage[] = [
-            ...messages,
-            {
-                id: `msg_${Date.now()}`,
-                sender: 'ai',
-                content: errorMessage,
-                type: 'error',
-            }
-        ];
-        setMessages(updatedMessages);
-        if (activeChatId) {
-            onMessagesUpdate(updatedMessages, activeChatId);
-        }
+        showErrorToast({
+            title: 'Tool Not Enabled',
+            description: `Tool '${toolUse.name}' is not enabled for action mode.`
+        });
         setIsLoading(false);
         setToolProgress(null);
         return;
@@ -216,20 +176,10 @@ export function ActionMode({
         
         // Check blacklist first (blacklist overrides whitelist)
         if (isCommandBlacklisted(command, getToolSettings())) {
-          const errorMessage = `Command '${command}' is blacklisted and cannot be executed.`;
-          const updatedMessages: ChatMessage[] = [
-              ...messages,
-              {
-                  id: `msg_${Date.now()}`,
-                  sender: 'ai',
-                  content: errorMessage,
-                  type: 'error',
-              }
-          ];
-          setMessages(updatedMessages);
-          if (activeChatId) {
-              onMessagesUpdate(updatedMessages, activeChatId);
-          }
+          showErrorToast({
+              title: 'Command Blacklisted',
+              description: `Command '${command}' is blacklisted and cannot be executed.`
+          });
           setIsLoading(false);
           setToolProgress(null);
           return;
@@ -265,20 +215,10 @@ export function ActionMode({
 
     } catch (error) {
         // Add error message
-        const errorContent = `Error executing tool: ${error instanceof Error ? error.message : String(error)}`;
-        const updatedMessages: ChatMessage[] = [
-            ...messages,
-            {
-                id: `msg_${Date.now()}`,
-                sender: 'ai',
-                content: errorContent,
-                type: 'error',
-            }
-        ];
-        setMessages(updatedMessages);
-        if (activeChatId) {
-            onMessagesUpdate(updatedMessages, activeChatId);
-        }
+        showErrorToast({
+            title: 'Tool Execution Error',
+            description: error instanceof Error ? error.message : String(error)
+        });
         setIsLoading(false);
     } finally {
       setToolProgress(null);
@@ -288,19 +228,20 @@ export function ActionMode({
   // Continue the conversation with the AI after a tool execution or initial prompt
   const continueConversation = async (currentMessages: ChatMessage[]) => {
     // Use settings prop
-    if (!settings || !activeChatId) {
-        console.error("Settings or activeChatId not available for continueConversation");
-        // Optionally show an error message to the user
-        const errorMsg = !settings ? 'Settings not loaded.' : 'No active chat selected.';
-        const updatedMessages: ChatMessage[] = [
-            ...currentMessages, // Use currentMessages passed to the function
-            { id: `msg_${Date.now()}`, sender: 'ai', content: `Error: ${errorMsg}`, type: 'error' }
-        ];
-        setMessages(updatedMessages); // Update local state to show error
+    if (!settings) {
+        console.error("Settings not available for continueConversation");
+        // Show an error message to the user
+        showErrorToast({
+            title: 'Settings Error',
+            description: 'Settings not loaded.'
+        });
         // No final save here as the operation failed before completion
         setIsLoading(false);
         return;
     }
+    
+    // If activeChatId is null, we can still continue the conversation
+    // The parent component will handle creating a new chat when we call onMessagesUpdate
 
 
     setIsLoading(true);
@@ -334,15 +275,10 @@ export function ActionMode({
       const apiKey = settings[`${provider}_api_key` as keyof AppSettings] as string | undefined;
 
       if (!apiKey) {
-          const errorContent = `API key for ${provider} is not set. Please check Settings.`;
-          const updatedMessages: ChatMessage[] = [
-              ...currentMessages,
-              { id: `msg_${Date.now()}`, sender: 'ai', content: errorContent, type: 'error' }
-          ];
-          setMessages(updatedMessages);
-          if (activeChatId) { // Ensure activeChatId is available
-              onMessagesUpdate(updatedMessages, activeChatId);
-          }
+          showErrorToast({
+              title: 'API Key Missing',
+              description: `API key for ${provider} is not set. Please check Settings.`
+          });
           setIsLoading(false);
           return;
       }
@@ -464,13 +400,10 @@ export function ActionMode({
 
             // Check if the tool is enabled for action mode
             if (!isToolEnabled(toolUse.name, 'action', getToolSettings())) {
-                const errorContent = `Tool '${toolUse.name}' is not enabled for action mode.`;
-                const finalMessages: ChatMessage[] = [
-                    ...intermediateMessages,
-                    { id: `msg_${Date.now()}_err`, sender: 'ai', content: errorContent, type: 'error' }
-                ];
-                setMessages(finalMessages);
-                if (activeChatId) onMessagesUpdate(finalMessages, activeChatId);
+                showErrorToast({
+                    title: 'Tool Not Enabled',
+                    description: `Tool '${toolUse.name}' is not enabled for action mode.`
+                });
                 setIsLoading(false);
                 return;
             }
@@ -481,13 +414,10 @@ export function ActionMode({
 
                 // Check blacklist first
                 if (isCommandBlacklisted(command, getToolSettings())) {
-                    const errorContent = `Command '${command}' is blacklisted and cannot be executed.`;
-                    const finalMessages: ChatMessage[] = [
-                        ...intermediateMessages,
-                        { id: `msg_${Date.now()}_blk`, sender: 'ai', content: errorContent, type: 'error' }
-                    ];
-                    setMessages(finalMessages);
-                    if (activeChatId) onMessagesUpdate(finalMessages, activeChatId);
+                    showErrorToast({
+                        title: 'Command Blacklisted',
+                        description: `Command '${command}' is blacklisted and cannot be executed.`
+                    });
                     setIsLoading(false);
                     return;
                 }
@@ -548,20 +478,37 @@ export function ActionMode({
       }
     } catch (error) {
       // Add error message
-      const errorContent = `Error: ${error instanceof Error ? error.message : String(error)}`;
-      const finalMessages: ChatMessage[] = [
-          ...currentMessages,
-          { id: `msg_${Date.now()}_err`, sender: 'ai', content: errorContent, type: 'error' }
-      ];
-      setMessages(finalMessages);
-      if (activeChatId) onMessagesUpdate(finalMessages, activeChatId);
+      // Parse the error message for title and description
+      let title = 'API Error';
+      let description = 'An unknown error occurred.';
+      if (error instanceof Error) {
+          const message = error.message;
+          // Basic parsing assuming "Error: Title. Description." or "Error: Title"
+          if (message.startsWith('API request failed')) {
+              title = message.split('.')[0] || 'API Request Failed';
+              description = message.split('.').slice(1).join('.').trim() || 'Ensure the correct API key is set.'
+          } else if (message.startsWith('Failed to parse response')) {
+              title = 'API Response Error';
+              description = message;
+          } else if (message.startsWith('Unsupported provider')) {
+              title = 'Configuration Error';
+              description = message;
+          } else {
+              // Generic error
+              title = 'Error';
+              description = message;
+          }
+      } else {
+          description = String(error);
+      }
+      showErrorToast({ title, description });
       setIsLoading(false);
     }
   };
 
 
   const handleSubmit = async () => {
-    if (!task.trim() || isLoading || !activeChatId) return;
+    if (!task.trim() || isLoading) return;
 
     // Use isLoadingSettings prop
     if (isLoadingSettings) {
@@ -572,14 +519,10 @@ export function ActionMode({
 
     // Use settings prop
     if (!settings) {
-        const errorMsg: ChatMessage = {
-            id: `msg_${Date.now()}_err`,
-            sender: 'ai', // System/error message
-            content: 'Settings not loaded. Cannot process task. Please check Settings or restart.',
-            type: 'error',
-        };
-        const updatedMessages = [...messages, errorMsg];
-        setMessages(updatedMessages);
+        showErrorToast({
+            title: 'Settings Error',
+            description: 'Settings not loaded. Cannot process task. Please check Settings or restart.'
+        });
         // Don't save this temporary error state
         return;
     }
@@ -603,122 +546,35 @@ export function ActionMode({
 
     // Start the conversation with the AI, passing the updated messages list
     await continueConversation(messagesWithUserTask);
-    // onMessagesUpdate is called within continueConversation or executeToolAndUpdateMessages
+    
+    // Save the messages to the parent component
+    if (activeChatId) {
+        onMessagesUpdate(messagesWithUserTask, activeChatId);
+    } else {
+        // If activeChatId is null, this is a new chat
+        // Generate a temporary ID for the parent to handle
+        const tempId = `new_${Date.now()}`;
+        onMessagesUpdate(messagesWithUserTask, tempId);
+    }
   };
 
 
   return (
-    // Use flex column, h-full to fill space
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={{ duration: 0.3 }}
-      // Consistent padding and structure with WalkthroughMode
-      className="flex flex-col h-full w-full p-4" // Removed max-w-3xl mx-auto
-    >
+    <div className="h-full flex flex-col">
       {/* Add a visually hidden heading for accessibility and testing */}
       <h2 className="sr-only">Action Mode</h2>
-
-      {/* Message Area using ScrollArea */}
-      <ScrollArea className="flex-grow mb-4 pr-4 -mr-4">
-         <div ref={viewportRef} className="space-y-2"> {/* Reduced space-y */}
-            {/* Map over ChatMessage[] */}
-            {messages.map((msg) => (
-                <motion.div
-                    key={msg.id} // Use msg.id from ChatMessage
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.3 }}
-                    // Use sender for alignment, type for styling
-                    className={`max-w-[80%] p-3 rounded-lg text-sm ${
-                        msg.sender === 'user'
-                            ? 'ml-auto bg-blue-600 text-white' // User message aligned right
-                            : msg.type === 'error' // Check type for specific styling
-                            ? 'mr-auto bg-red-100 dark:bg-red-900/50 text-red-900 dark:text-red-200' // Error aligned left
-                            : msg.type === 'tool-request'
-                            ? 'mr-auto bg-amber-100 dark:bg-amber-900/50 text-amber-900 dark:text-amber-200' // Tool request aligned left
-                            : msg.type === 'tool-response'
-                            ? 'mr-auto bg-green-100 dark:bg-green-900/50 text-green-900 dark:text-green-200' // Tool response aligned left
-                            : 'mr-auto bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100' // AI/Status aligned left
-                    }`}
-                >
-                    {/* Render newlines correctly */}
-                    {msg.content.split('\n').map((line, i) => (
-                        <p key={i} style={{ minHeight: '1em' }}>{line || '\u00A0'}</p>
-                    ))}
-                    {/* Optionally display tool info if present */}
-                    {msg.type === 'tool-request' && msg.toolUse && (
-                        <div className="mt-2 text-xs opacity-80 border-t border-amber-300 dark:border-amber-700 pt-1">
-                            Tool: {msg.toolUse.name} | Params: {JSON.stringify(msg.toolUse.params)}
-                        </div>
-                    )}
-                </motion.div>
-            ))}
-             {isLoading && !toolProgress && !pendingToolUse && ( // Show thinking indicator only if not waiting for tool/approval
-                 <motion.div
-                   initial={{ opacity: 0, y: 10 }}
-                   animate={{ opacity: 1, y: 0 }}
-                   transition={{ duration: 0.3 }}
-                   className="max-w-[80%] p-3 rounded-lg bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 animate-pulse text-sm mr-auto"
-                 >
-                    Processing...
-                 </motion.div>
-             )}
-             {toolProgress && ( // Show tool progress
-                 <motion.div
-                   initial={{ opacity: 0, y: 10 }}
-                   animate={{ opacity: 1, y: 0 }}
-                   transition={{ duration: 0.3 }}
-                   className="max-w-[80%] p-3 rounded-lg bg-blue-100 dark:bg-blue-900/50 text-blue-900 dark:text-blue-200 text-sm mr-auto"
-                 >
-                    <div className="flex items-center">
-                      <div className="mr-2 h-4 w-4 rounded-full bg-blue-500 animate-pulse"></div>
-                      <p>{toolProgress.message || 'Executing tool...'}</p>
-                    </div>
-                    {toolProgress.progress !== undefined && (
-                      <div className="w-full bg-gray-200 rounded-full h-2.5 mt-2">
-                        <div 
-                          className="bg-blue-600 h-2.5 rounded-full" 
-                          style={{ width: `${toolProgress.progress}%` }}
-                        ></div>
-                      </div>
-                    )}
-                 </motion.div>
-             )}
-         </div>
-      </ScrollArea>
-
-      {/* Tool Approval Dialog */}
-      {pendingToolUse && (
-        <ToolApproval
-          toolUse={pendingToolUse}
-          onApprove={() => handleToolApproval(true)}
-          onReject={() => handleToolApproval(false)}
-          isOpen={!!pendingToolUse}
-        />
-      )}
-
-      {/* Input Bar at the bottom - Consistent with WalkthroughMode */}
-      <div className="flex space-x-2 items-center border-t pt-4"> {/* Reverted py-4 to pt-4 */}
-        <Input
-          placeholder="Type your problem..."
-          value={task}
-          onChange={(e) => setTask(e.target.value)}
-          onKeyPress={(e) => e.key === 'Enter' && handleSubmit()}
-          disabled={isLoading}
-          className="flex-1 h-12" // Reduced height to h-12
-          aria-label="Task input"
-        />
-        {/* Adjusted button size to match input */}
-        <Button 
-          onClick={handleSubmit} 
-          disabled={isLoading || !task.trim()}
-          className="h-12 w-12" 
-          aria-label="Submit task"
-        >
-          <Send className="h-5 w-5" /> {/* Adjusted icon size */}
-        </Button>
-      </div>
-    </motion.div>
+      
+      <ChatComponent
+        messages={messages}
+        isLoading={isLoading}
+        userInput={task}
+        setUserInput={setTask}
+        handleSendMessage={handleSubmit}
+        pendingToolUse={pendingToolUse}
+        handleToolApproval={handleToolApproval}
+        toolProgress={toolProgress}
+        inputPlaceholder="Type your problem..."
+      />
+    </div>
   );
 }

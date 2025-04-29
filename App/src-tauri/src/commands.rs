@@ -10,6 +10,8 @@ use once_cell::sync::Lazy;
 
 // Global settings storage
 static SETTINGS: Lazy<Mutex<Option<AppSettings>>> = Lazy::new(|| Mutex::new(None));
+// Global chats storage
+static CHATS: Lazy<Mutex<Vec<RustSavedChat>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OsInfo {
@@ -62,6 +64,23 @@ pub struct WebSearchResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct WebSearchWeb {
     pub results: Vec<WebSearchResult>,
+}
+
+// Chat message structure
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ChatMessage {
+    pub sender: String, // "user" or "assistant"
+    pub content: String,
+}
+
+// Saved chat structure
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RustSavedChat {
+    pub id: String,
+    pub timestamp: u64,
+    pub mode: String, // "action" or "walkthrough"
+    pub messages: Vec<ChatMessage>,
+    pub title: Option<String>,
 }
 
 // Get current working directory
@@ -182,6 +201,19 @@ fn get_settings_path(app_handle: &AppHandle) -> Result<PathBuf, String> {
     Ok(data_dir.join("settings.json"))
 }
 
+// Helper function to get the chats file path
+fn get_chats_path(app_handle: &AppHandle) -> Result<PathBuf, String> {
+    // Use ok_or_else to convert Option<PathBuf> to Result<PathBuf, String>
+    let data_dir = app_handle.path().app_data_dir()
+        .or_else(|_| Err("Failed to get app data directory".to_string()))?;
+    
+    // Ensure the directory exists
+    create_dir_all(&data_dir)
+        .map_err(|e| format!("Failed to create app data directory: {}", e))?;
+        
+    Ok(data_dir.join("chats.json"))
+}
+
 // Get settings
 #[command]
 pub fn get_settings(app_handle: AppHandle) -> AppSettings {
@@ -254,6 +286,129 @@ pub fn save_settings(app_handle: AppHandle, settings: AppSettings) -> Result<(),
             Err(e) => Err(format!("Failed to write settings file: {}", e)),
         },
         Err(e) => Err(format!("Failed to serialize settings: {}", e)),
+    }
+}
+
+// Get all chats
+#[command]
+pub fn get_all_chats(app_handle: AppHandle) -> Vec<RustSavedChat> {
+    // Try to get chats from memory first
+    let mut chats_guard = CHATS.lock().unwrap();
+
+    // If chats are already loaded in memory, return them
+    if !chats_guard.is_empty() {
+        println!("Returning chats from memory cache.");
+        return chats_guard.clone();
+    }
+
+    // If not in memory, try to load from file
+    let chats_path = match get_chats_path(&app_handle) {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("Error getting chats path: {}", e);
+            return Vec::new(); // Return empty vector if path resolution fails
+        }
+    };
+
+    println!("Attempting to load chats from: {:?}", chats_path);
+    let chats = if chats_path.exists() {
+        match fs::read_to_string(&chats_path) {
+            Ok(json) => match serde_json::from_str::<Vec<RustSavedChat>>(&json) {
+                Ok(loaded_chats) => {
+                    println!("Successfully loaded {} chats from file.", loaded_chats.len());
+                    loaded_chats
+                },
+                Err(e) => {
+                    eprintln!("Failed to parse chats file: {}. Using empty list.", e);
+                    Vec::new()
+                },
+            },
+            Err(e) => {
+                eprintln!("Failed to read chats file: {}. Using empty list.", e);
+                Vec::new()
+            },
+        }
+    } else {
+        println!("Chats file not found. Using empty list.");
+        Vec::new()
+    };
+
+    // Store in memory for future use
+    *chats_guard = chats.clone();
+
+    // Sort by timestamp (newest first) before returning
+    let mut sorted_chats = chats.clone();
+    sorted_chats.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    sorted_chats
+}
+
+// Save a chat
+#[command]
+pub fn save_chat(app_handle: AppHandle, chat: RustSavedChat) -> Result<(), String> {
+    println!("Saving chat with ID: {}", chat.id);
+    
+    // Get the current chats
+    let mut chats_guard = CHATS.lock().unwrap();
+    
+    // Check if this chat already exists
+    let existing_index = chats_guard.iter().position(|c| c.id == chat.id);
+    
+    // Update or add the chat
+    if let Some(index) = existing_index {
+        // Update existing chat
+        chats_guard[index] = chat.clone();
+    } else {
+        // Add new chat
+        chats_guard.push(chat.clone());
+    }
+    
+    // Sort by timestamp (newest first)
+    chats_guard.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    
+    // Save to file
+    let chats_path = get_chats_path(&app_handle)?;
+    
+    match serde_json::to_string_pretty(&*chats_guard) {
+        Ok(json) => match fs::write(&chats_path, json) {
+            Ok(_) => {
+                println!("Chats saved successfully to {:?}", chats_path);
+                Ok(())
+            },
+            Err(e) => Err(format!("Failed to write chats file: {}", e)),
+        },
+        Err(e) => Err(format!("Failed to serialize chats: {}", e)),
+    }
+}
+
+// Delete a chat
+#[command]
+pub fn delete_chat(app_handle: AppHandle, chat_id: String) -> Result<(), String> {
+    println!("Deleting chat with ID: {}", chat_id);
+    
+    // Get the current chats
+    let mut chats_guard = CHATS.lock().unwrap();
+    
+    // Remove the chat with the given ID
+    let initial_len = chats_guard.len();
+    chats_guard.retain(|c| c.id != chat_id);
+    
+    // Check if a chat was actually removed
+    if chats_guard.len() == initial_len {
+        return Err(format!("Chat with ID {} not found", chat_id));
+    }
+    
+    // Save to file
+    let chats_path = get_chats_path(&app_handle)?;
+    
+    match serde_json::to_string_pretty(&*chats_guard) {
+        Ok(json) => match fs::write(&chats_path, json) {
+            Ok(_) => {
+                println!("Chats saved successfully after deletion to {:?}", chats_path);
+                Ok(())
+            },
+            Err(e) => Err(format!("Failed to write chats file after deletion: {}", e)),
+        },
+        Err(e) => Err(format!("Failed to serialize chats after deletion: {}", e)),
     }
 }
 
