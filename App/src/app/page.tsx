@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from "framer-motion";
 import { invoke, isTauri } from '@tauri-apps/api/core'; // Import invoke and isTauri
 import { ActionMode } from '@/components/modes/action-mode/ActionMode';
@@ -17,6 +17,24 @@ import { Folder } from '@/shared/models';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"; // Added Select imports
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils"; // Import cn utility
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+  DragStartEvent,
+  DragOverEvent
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  useSortable
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 // Define the modes available in the chat interface
 type Mode = 'action' | 'walkthrough';
@@ -57,7 +75,7 @@ export default function Home() {
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [activeChatMessages, setActiveChatMessages] = useState<ChatMessage[]>([]);
   const [filterMode, setFilterMode] = useState<'all' | 'action' | 'walkthrough'>('all'); // Filter state
-  const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest'); // Sort state
+  const [sortOrder, setSortOrder] = useState<'custom' | 'newest' | 'oldest'>('custom'); // Sort state
   const [searchQuery, setSearchQuery] = useState<string>(''); // Search state
   const [editingChatId, setEditingChatId] = useState<string | null>(null); // State for tracking which chat is being edited
   const [editingChatName, setEditingChatName] = useState<string>(''); // State for the edited chat name
@@ -76,10 +94,11 @@ export default function Home() {
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
   const [editingFolderName, setEditingFolderName] = useState<string>('');
   
-  // Drag and drop state
-  const [draggedChatId, setDraggedChatId] = useState<string | null>(null);
-  const [draggedFolderId, setDraggedFolderId] = useState<string | null>(null);
-  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  // DnD state
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [activeType, setActiveType] = useState<'chat' | 'folder' | null>(null);
+  const [overFolderId, setOverFolderId] = useState<string | null>(null);
+  const [isSorting, setIsSorting] = useState<boolean>(false);
   
   // State for mode switching
   const [previousMode, setPreviousMode] = useState<Mode | null>(null);
@@ -99,6 +118,7 @@ export default function Home() {
       const savedFolders = await getAllFolders();
       console.log("Folders loaded:", savedFolders);
       const savedChatFolders = loadChatFolders();
+      console.log("Chat-folder mappings loaded:", savedChatFolders);
       setFolders(savedFolders);
       setChatFolders(savedChatFolders);
     } catch (error) {
@@ -244,7 +264,12 @@ export default function Home() {
             if (chatId === activeChatId) {
                 if (remainingChats.length > 0) {
                     // Sort remaining chats according to current sort order and select the first one
-                    const sortedRemaining = remainingChats.sort((a, b) => sortOrder === 'newest' ? b.timestamp - a.timestamp : a.timestamp - b.timestamp);
+                    let sortedRemaining = [...remainingChats];
+                    if (sortOrder !== 'custom') {
+                      sortedRemaining = remainingChats.sort((a, b) =>
+                        sortOrder === 'newest' ? b.timestamp - a.timestamp : a.timestamp - b.timestamp
+                      );
+                    }
                     const nextActiveChat = sortedRemaining[0];
                     setActiveChatId(nextActiveChat.id);
                     setActiveChatMessages(nextActiveChat.messages);
@@ -315,31 +340,88 @@ export default function Home() {
     }
   }, [handleSaveChatName]);
   
-  // Drag and drop handlers
-  const handleDragStart = useCallback((e: React.DragEvent, id: string, type: 'chat' | 'folder') => {
-    e.dataTransfer.setData('text/plain', id);
-    e.dataTransfer.setData('type', type);
-    if (type === 'chat') {
-      setDraggedChatId(id);
+  // DnD sensors and handlers
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8,
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    const { active } = event;
+    const id = active.id as string;
+    const type = id.startsWith('folder_') ? 'folder' : 'chat';
+    
+    setActiveId(id);
+    setActiveType(type);
+  }, []);
+
+  const handleDragOver = useCallback((event: DragOverEvent) => {
+    const { over } = event;
+    
+    if (over && over.id.toString().startsWith('folder_')) {
+      setOverFolderId(over.id.toString());
     } else {
-      setDraggedFolderId(id);
+      setOverFolderId(null);
     }
   }, []);
   
-  const handleDragOver = useCallback((e: React.DragEvent, id: string, type: 'folder' | 'root') => {
-    e.preventDefault();
-    if (type === 'folder') {
-      setDropTargetId(id);
-    } else {
-      setDropTargetId('root');
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+    
+    if (over) {
+      const activeId = active.id.toString();
+      const overId = over.id.toString();
+      
+      if (activeType === 'chat') {
+        // Moving a chat
+        if (overId.startsWith('folder_')) {
+          // Move chat to folder
+          setChatFolders(prev => {
+            const newMapping = {...prev, [activeId]: overId};
+            console.log("Moving chat to folder:", activeId, "to", overId, newMapping);
+            saveChatFolders(newMapping); // Explicitly save the updated mapping
+            return newMapping;
+          });
+        } else if (overId === 'root' || activeId !== overId) {
+          // Move chat to root or reorder
+          setChatFolders(prev => {
+            const newMapping = {...prev};
+            delete newMapping[activeId];
+            console.log("Moving chat to root:", activeId, newMapping);
+            saveChatFolders(newMapping); // Explicitly save the updated mapping
+            return newMapping;
+          });
+        }
+      } else if (activeType === 'folder') {
+        // Moving a folder
+        if (overId.startsWith('folder_') && activeId !== overId) {
+          // Move folder to another folder (create subfolder)
+          setFolders(prev =>
+            prev.map(folder =>
+              folder.id === activeId ? {...folder, parentId: overId} : folder
+            )
+          );
+        } else if (overId === 'root') {
+          // Move folder to root
+          setFolders(prev =>
+            prev.map(folder =>
+              folder.id === activeId ? {...folder, parentId: null} : folder
+            )
+          );
+        }
+      }
     }
-  }, []);
-  
-  const handleDragEnd = useCallback(() => {
-    setDraggedChatId(null);
-    setDraggedFolderId(null);
-    setDropTargetId(null);
-  }, []);
+    
+    setActiveId(null);
+    setActiveType(null);
+    setOverFolderId(null);
+  }, [activeType]);
   
   // Save folders whenever they change
   useEffect(() => {
@@ -359,53 +441,324 @@ export default function Home() {
   
   // Save chat-folder mappings whenever they change
   useEffect(() => {
+    console.log("Saving chat-folder mappings:", chatFolders);
     saveChatFolders(chatFolders);
   }, [chatFolders]);
   
-  const handleDrop = useCallback((e: React.DragEvent, targetId: string, type: 'folder' | 'root') => {
-    e.preventDefault();
-    const id = e.dataTransfer.getData('text/plain');
-    const itemType = e.dataTransfer.getData('type');
-    
-    if (itemType === 'chat') {
-      // Moving a chat
-      if (type === 'folder') {
-        // Move chat to folder
-        setChatFolders(prev => ({
-          ...prev,
-          [id]: targetId
-        }));
-      } else if (type === 'root') {
-        // Move chat to root (remove from folder)
-        setChatFolders(prev => {
-          const newMapping = {...prev};
-          delete newMapping[id];
-          return newMapping;
-        });
-      }
-    } else if (itemType === 'folder') {
-      // Moving a folder
-      if (type === 'folder' && id !== targetId) {
-        // Move folder to another folder (create subfolder)
-        setFolders(prev =>
-          prev.map(folder =>
-            folder.id === id ? {...folder, parentId: targetId} : folder
-          )
-        );
-      } else if (type === 'root') {
-        // Move folder to root
-        setFolders(prev =>
-          prev.map(folder =>
-            folder.id === id ? {...folder, parentId: null} : folder
-          )
-        );
-      }
+  // Reload folder data when chats change
+  useEffect(() => {
+    if (savedChats.length > 0) {
+      console.log("Chats changed, reloading folder data");
+      loadFolderData();
     }
+  }, [savedChats]);
+  
+  // Function to render a sortable folder
+  const SortableFolder = ({ folder }: { folder: Folder }) => {
+    const {
+      attributes,
+      listeners,
+      setNodeRef,
+      transform,
+      transition,
+      isDragging
+    } = useSortable({ id: folder.id });
     
-    setDraggedChatId(null);
-    setDraggedFolderId(null);
-    setDropTargetId(null);
-  }, []);
+    const style = {
+      transform: CSS.Transform.toString(transform),
+      transition,
+      opacity: isDragging ? 0.5 : 1,
+      zIndex: isDragging ? 999 : 'auto',
+      ...(isDragging ? { position: 'relative' as const } : {}),
+    };
+    
+    return (
+      <div
+        ref={setNodeRef}
+        style={style}
+        className={cn(
+          "mb-2",
+          overFolderId === folder.id ? 'ring-2 ring-blue-500 rounded-md' : ''
+        )}
+      >
+        <div className="group relative">
+          {/* Folder header with expand/collapse */}
+          <div className="flex items-center">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 p-0"
+              onClick={() => {
+                const updatedFolder = {
+                  ...folders.find(f => f.id === folder.id)!,
+                  isExpanded: !folders.find(f => f.id === folder.id)!.isExpanded
+                };
+                
+                // Update state immediately for responsive UI
+                setFolders(folders.map(f =>
+                  f.id === folder.id ? {...f, isExpanded: !f.isExpanded} : f
+                ));
+                
+                // Save the updated folder to backend
+                saveFolder(updatedFolder)
+                  .then(() => {
+                    console.log("Folder expansion state updated successfully");
+                  })
+                  .catch(err => {
+                    console.error("Failed to update folder expansion state:", err);
+                  });
+              }}
+            >
+              {folder.isExpanded ?
+                <ChevronDown className="h-4 w-4" /> :
+                <ChevronRight className="h-4 w-4" />
+              }
+            </Button>
+            
+            {editingFolderId === folder.id ? (
+              // Editing folder name
+              <Input
+                value={editingFolderName}
+                onChange={(e) => setEditingFolderName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    const updatedFolder = {
+                      ...folders.find(f => f.id === folder.id)!,
+                      name: editingFolderName
+                    };
+                    
+                    // Save the updated folder to backend
+                    saveFolder(updatedFolder)
+                      .then(() => {
+                        console.log("Folder name updated successfully");
+                        setFolders(folders.map(f =>
+                          f.id === folder.id ? {...f, name: editingFolderName} : f
+                        ));
+                        setEditingFolderId(null);
+                      })
+                      .catch(err => {
+                        console.error("Failed to update folder name:", err);
+                        alert("Failed to update folder name. Please try again.");
+                        setEditingFolderId(null);
+                      });
+                  } else if (e.key === 'Escape') {
+                    setEditingFolderId(null);
+                  }
+                }}
+                onBlur={() => {
+                  const updatedFolder = {
+                    ...folders.find(f => f.id === folder.id)!,
+                    name: editingFolderName
+                  };
+                  
+                  // Save the updated folder to backend
+                  saveFolder(updatedFolder)
+                    .then(() => {
+                      console.log("Folder name updated successfully on blur");
+                      setFolders(folders.map(f =>
+                        f.id === folder.id ? {...f, name: editingFolderName} : f
+                      ));
+                      setEditingFolderId(null);
+                    })
+                    .catch(err => {
+                      console.error("Failed to update folder name on blur:", err);
+                      setEditingFolderId(null);
+                    });
+                }}
+                autoFocus
+                className="h-7 text-sm ml-1 flex-1"
+              />
+            ) : (
+              <Button
+                variant="ghost"
+                className="h-7 flex-1 justify-start text-sm px-2"
+                {...attributes}
+                {...listeners}
+                onClick={() => {
+                  const updatedFolder = {
+                    ...folders.find(f => f.id === folder.id)!,
+                    isExpanded: !folders.find(f => f.id === folder.id)!.isExpanded
+                  };
+                  
+                  // Update state immediately for responsive UI
+                  setFolders(folders.map(f =>
+                    f.id === folder.id ? {...f, isExpanded: !f.isExpanded} : f
+                  ));
+                  
+                  // Save the updated folder to backend
+                  saveFolder(updatedFolder)
+                    .then(() => {
+                      console.log("Folder expansion state updated successfully (from name click)");
+                    })
+                    .catch(err => {
+                      console.error("Failed to update folder expansion state (from name click):", err);
+                    });
+                }}
+              >
+                <FolderIcon className="h-4 w-4 mr-2 text-gray-500" />
+                <span className="font-medium">{folder.name}</span>
+              </Button>
+            )}
+            
+            {/* Folder action buttons */}
+            <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-5 w-5 p-0 flex-shrink-0"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setEditingFolderId(folder.id);
+                  setEditingFolderName(folder.name);
+                }}
+              >
+                <Edit2 className="h-3 w-3 text-gray-500 hover:text-blue-500" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-5 w-5 p-0 flex-shrink-0"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  // Delete folder and move all chats to root
+                  const updatedChatFolders = {...chatFolders};
+                  Object.keys(updatedChatFolders).forEach(chatId => {
+                    if (updatedChatFolders[chatId] === folder.id) {
+                      delete updatedChatFolders[chatId];
+                    }
+                  });
+                  
+                  // Delete folder from backend
+                  deleteFolder(folder.id)
+                    .then(() => {
+                      setChatFolders(updatedChatFolders);
+                      setFolders(folders.filter(f => f.id !== folder.id));
+                    })
+                    .catch(err => console.error(`Failed to delete folder ${folder.id}:`, err));
+                }}
+              >
+                <Trash2 className="h-3 w-3 text-gray-500 hover:text-red-500" />
+              </Button>
+            </div>
+          </div>
+          
+          {/* Folder contents */}
+          {folder.isExpanded && (
+            <div className="pl-8 mt-1 space-y-1 border-l-2 border-gray-100 dark:border-gray-700 ml-2">
+              {/* Subfolders in this folder */}
+              {folders
+                .filter(f => f.parentId === folder.id)
+                .map((subfolder) => (
+                  <SortableFolder key={subfolder.id} folder={subfolder} />
+                ))}
+                
+              {/* Chats in this folder */}
+              <SortableContext
+                items={displayedChats.filter(chat => chatFolders[chat.id] === folder.id).map(chat => chat.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                {displayedChats
+                  .filter(chat => chatFolders[chat.id] === folder.id)
+                  .map((chat) => (
+                    <SortableChat key={chat.id} chat={chat} />
+                  ))}
+              </SortableContext>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+  
+  // Function to render a sortable chat
+  const SortableChat = ({ chat }: { chat: SavedChat }) => {
+    const {
+      attributes,
+      listeners,
+      setNodeRef,
+      transform,
+      transition,
+      isDragging
+    } = useSortable({ id: chat.id });
+    
+    const style = {
+      transform: CSS.Transform.toString(transform),
+      transition,
+      opacity: isDragging ? 0.5 : 1,
+      zIndex: isDragging ? 999 : 'auto',
+      ...(isDragging ? { position: 'relative' as const } : {}),
+    };
+    
+    return (
+      <div
+        ref={setNodeRef}
+        style={style}
+        className="group relative mb-1 flex items-center"
+      >
+        {/* Chat content - main part */}
+        <div className="flex-grow">
+          {/* Chat content */}
+          <div className="pt-1">
+            {editingChatId === chat.id ? (
+              // Editing mode
+              <div className="w-full">
+                <Input
+                  value={editingChatName}
+                  onChange={(e) => setEditingChatName(e.target.value)}
+                  onKeyDown={(e) => handleEditKeyPress(e, chat.id)}
+                  onBlur={() => handleSaveChatName(chat.id)}
+                  autoFocus
+                  className="h-7 text-sm"
+                />
+              </div>
+            ) : (
+              // Display mode
+              <Button
+                variant="ghost"
+                className={cn(
+                  "w-full justify-start text-sm h-7 py-1 px-2 text-left",
+                  chat.id === activeChatId ? 'bg-gray-200 dark:bg-gray-700' : ''
+                )}
+                onClick={() => handleSelectChat(chat.id)}
+                data-testid={`chat-button-${chat.id}`}
+                {...attributes}
+                {...listeners}
+              >
+                <span className="font-medium truncate block">
+                  {chat.title || (chat.id.startsWith('new_') ? 'New Chat' : `Chat ${chat.id.substring(0, 8)}`)}
+                </span>
+              </Button>
+            )}
+          </div>
+        </div>
+        
+        {/* Action buttons on the right */}
+        <div className="flex opacity-0 group-hover:opacity-100 transition-opacity z-10 gap-1 ml-1 mr-1 flex-shrink-0">
+          {/* Edit button */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-5 w-5 p-0"
+            onClick={(e) => handleEditChat(e, chat.id)}
+            aria-label="Edit chat name"
+          >
+            <Edit2 className="h-3 w-3 text-gray-500 hover:text-blue-500" />
+          </Button>
+          
+          {/* Delete button */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-5 w-5 p-0"
+            onClick={(e) => handleDeleteChat(e, chat.id)}
+            aria-label="Delete chat"
+          >
+            <Trash2 className="h-3 w-3 text-gray-500 hover:text-red-500" />
+          </Button>
+        </div>
+      </div>
+    );
+  };
 
   // Callback function for WalkthroughMode to update messages and trigger save
   const handleMessagesUpdate = useCallback((updatedMessages: ChatMessage[], chatIdToSave: string) => {
@@ -455,13 +808,16 @@ export default function Home() {
           }
 
           // Re-sort based on current sort order
-          return newChats.sort((a, b) => {
-            if (sortOrder === 'newest') {
-              return b.timestamp - a.timestamp;
-            } else {
-              return a.timestamp - b.timestamp;
-            }
-          });
+          if (sortOrder !== 'custom') {
+            return newChats.sort((a, b) => {
+              if (sortOrder === 'newest') {
+                return b.timestamp - a.timestamp;
+              } else {
+                return a.timestamp - b.timestamp;
+              }
+            });
+          }
+          return newChats;
         });
 
         // If this was a new chat, update the activeChatId to the real ID
@@ -506,13 +862,15 @@ export default function Home() {
     }
 
     // Apply sort
-    chats.sort((a, b) => {
-      if (sortOrder === 'newest') {
-        return b.timestamp - a.timestamp;
-      } else {
-        return a.timestamp - b.timestamp;
-      }
-    });
+    if (sortOrder !== 'custom') {
+      chats.sort((a, b) => {
+        if (sortOrder === 'newest') {
+          return b.timestamp - a.timestamp;
+        } else {
+          return a.timestamp - b.timestamp;
+        }
+      });
+    }
 
     return chats;
   }, [savedChats, filterMode, sortOrder, searchQuery]);
@@ -527,30 +885,23 @@ export default function Home() {
       <aside className="w-80 flex flex-col bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">
         <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
             <h1 className="text-xl font-semibold">AIT</h1>
-            {/* Container for Plus button and hover dropdown */}
-            <div
-              className="relative"
-              onMouseEnter={() => setIsHoveringNewOptions(true)}
-              onMouseLeave={() => setIsHoveringNewOptions(false)}
-            >
-              {/* Plus button - creates new chat directly */}
+            {/* Container for Plus button and dropdown */}
+            <div className="relative">
+              {/* Plus button - toggles dropdown */}
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => {
-                  handleNewChat();
-                  setIsHoveringNewOptions(false); // Hide dropdown on click
-                }}
-                aria-label="New Chat"
+                onClick={() => setIsHoveringNewOptions(!isHoveringNewOptions)}
+                onMouseEnter={() => setIsHoveringNewOptions(true)}
+                aria-label="New Chat or Folder"
               >
                 <Plus className="h-5 w-5" />
               </Button>
 
-              {/* Hover Dropdown menu for new chat/folder */}
+              {/* Dropdown menu for new chat/folder */}
               {isHoveringNewOptions && (
                 <div
                   className="absolute right-0 mt-1 w-40 bg-white dark:bg-gray-800 rounded-md shadow-lg z-50 border border-gray-200 dark:border-gray-700"
-                  // Keep dropdown open if mouse moves onto it
                   onMouseEnter={() => setIsHoveringNewOptions(true)}
                   onMouseLeave={() => setIsHoveringNewOptions(false)}
                 >
@@ -577,7 +928,7 @@ export default function Home() {
                         id: newFolderId,
                         name: 'New Folder',
                         parentId: null,
-                        isExpanded: true
+                        isExpanded: false
                       };
                       
                       console.log("Creating new folder:", newFolder);
@@ -605,9 +956,9 @@ export default function Home() {
             </div>
         </div>
         {/* Removed erroneous ScrollArea tag */}
-        <ScrollArea className="flex-1">
+        <ScrollArea className="flex-1 overflow-x-hidden">
           {/* Add data-testid for easier selection in tests */}
-          <div data-testid="chat-list" className="p-4 space-y-2">
+          <div data-testid="chat-list" className="p-4 space-y-2 overflow-x-hidden">
             {/* Search Bar */}
                     <div className="relative mb-3">
                       <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -633,12 +984,15 @@ export default function Home() {
                     <SelectItem value="action">Action</SelectItem>
                  </SelectContent>
                </Select>
-               <Select value={sortOrder} onValueChange={(value: string) => setSortOrder(value as 'newest' | 'oldest')}>
+               <Select value={sortOrder} onValueChange={(value: string) => setSortOrder(value as 'custom' | 'newest' | 'oldest')}>
                  <SelectTrigger className="h-8 text-xs flex-1" aria-label="Sort chats by date">
-                    {sortOrder === 'newest' ? <SortDesc className="h-3 w-3 mr-1 inline-block" /> : <SortAsc className="h-3 w-3 mr-1 inline-block" />}
+                    {sortOrder === 'newest' ? <SortDesc className="h-3 w-3 mr-1 inline-block" /> :
+                     sortOrder === 'oldest' ? <SortAsc className="h-3 w-3 mr-1 inline-block" /> :
+                     <Filter className="h-3 w-3 mr-1 inline-block" />}
                     <SelectValue placeholder="Sort" />
                  </SelectTrigger>
                  <SelectContent>
+                    <SelectItem value="custom">Custom Order</SelectItem>
                     <SelectItem value="newest">Newest First</SelectItem>
                     <SelectItem value="oldest">Oldest First</SelectItem>
                  </SelectContent>
@@ -646,344 +1000,49 @@ export default function Home() {
             </div>
 
             {/* Chat List */}
-            {/* Folders first */}
-            {folders.filter(folder => folder.parentId === null).map((folder) => (
-              <div
-                key={folder.id}
-                className={cn(
-                  "mb-2",
-                  dropTargetId === folder.id ? 'ring-2 ring-blue-500 rounded-md' : ''
-                )}
-                onDragOver={(e) => handleDragOver(e, folder.id, 'folder')}
-                onDrop={(e) => handleDrop(e, folder.id, 'folder')}
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragStart={handleDragStart}
+              onDragOver={handleDragOver}
+              onDragEnd={handleDragEnd}
+              modifiers={[]}
+            >
+              {/* Root folders */}
+              <SortableContext
+                items={folders.filter(folder => folder.parentId === null).map(folder => folder.id)}
+                strategy={verticalListSortingStrategy}
               >
-                <div
-                  className={cn(
-                    "group relative",
-                    draggedFolderId === folder.id ? 'opacity-50' : ''
-                  )}
-                  draggable
-                  onDragStart={(e) => handleDragStart(e, folder.id, 'folder')}
-                  onDragEnd={handleDragEnd}
-                >
-                  {/* Folder header with expand/collapse */}
-                  <div className="flex items-center">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6 p-0"
-                      onClick={() => {
-                        const updatedFolder = {
-                          ...folders.find(f => f.id === folder.id)!,
-                          isExpanded: !folders.find(f => f.id === folder.id)!.isExpanded
-                        };
-                        
-                        // Update state immediately for responsive UI
-                        setFolders(folders.map(f =>
-                          f.id === folder.id ? {...f, isExpanded: !f.isExpanded} : f
-                        ));
-                        
-                        // Save the updated folder to backend
-                        saveFolder(updatedFolder)
-                          .then(() => {
-                            console.log("Folder expansion state updated successfully");
-                          })
-                          .catch(err => {
-                            console.error("Failed to update folder expansion state:", err);
-                          });
-                      }}
-                    >
-                      {folder.isExpanded ?
-                        <ChevronDown className="h-4 w-4" /> :
-                        <ChevronRight className="h-4 w-4" />
-                      }
-                    </Button>
-                    
-                    {editingFolderId === folder.id ? (
-                      // Editing folder name
-                      <Input
-                        value={editingFolderName}
-                        onChange={(e) => setEditingFolderName(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            const updatedFolder = {
-                              ...folders.find(f => f.id === folder.id)!,
-                              name: editingFolderName
-                            };
-                            
-                            // Save the updated folder to backend
-                            saveFolder(updatedFolder)
-                              .then(() => {
-                                console.log("Folder name updated successfully");
-                                setFolders(folders.map(f =>
-                                  f.id === folder.id ? {...f, name: editingFolderName} : f
-                                ));
-                                setEditingFolderId(null);
-                              })
-                              .catch(err => {
-                                console.error("Failed to update folder name:", err);
-                                alert("Failed to update folder name. Please try again.");
-                                setEditingFolderId(null);
-                              });
-                          } else if (e.key === 'Escape') {
-                            setEditingFolderId(null);
-                          }
-                        }}
-                        onBlur={() => {
-                          const updatedFolder = {
-                            ...folders.find(f => f.id === folder.id)!,
-                            name: editingFolderName
-                          };
-                          
-                          // Save the updated folder to backend
-                          saveFolder(updatedFolder)
-                            .then(() => {
-                              console.log("Folder name updated successfully on blur");
-                              setFolders(folders.map(f =>
-                                f.id === folder.id ? {...f, name: editingFolderName} : f
-                              ));
-                              setEditingFolderId(null);
-                            })
-                            .catch(err => {
-                              console.error("Failed to update folder name on blur:", err);
-                              setEditingFolderId(null);
-                            });
-                        }}
-                        autoFocus
-                        className="h-7 text-sm ml-1 flex-1"
-                      />
-                    ) : (
-                      <Button
-                        variant="ghost"
-                        className="h-7 flex-1 justify-start text-sm px-2"
-                        onClick={() => {
-                          const updatedFolder = {
-                            ...folders.find(f => f.id === folder.id)!,
-                            isExpanded: !folders.find(f => f.id === folder.id)!.isExpanded
-                          };
-                          
-                          // Update state immediately for responsive UI
-                          setFolders(folders.map(f =>
-                            f.id === folder.id ? {...f, isExpanded: !f.isExpanded} : f
-                          ));
-                          
-                          // Save the updated folder to backend
-                          saveFolder(updatedFolder)
-                            .then(() => {
-                              console.log("Folder expansion state updated successfully (from name click)");
-                            })
-                            .catch(err => {
-                              console.error("Failed to update folder expansion state (from name click):", err);
-                            });
-                        }}
-                      >
-                        <FolderIcon className="h-4 w-4 mr-2 text-gray-500" />
-                        <span className="font-medium">{folder.name}</span>
-                      </Button>
-                    )}
-                    
-                    {/* Folder action buttons */}
-                    <div className="opacity-0 group-hover:opacity-100 transition-opacity flex">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setEditingFolderId(folder.id);
-                          setEditingFolderName(folder.name);
-                        }}
-                      >
-                        <Edit2 className="h-3 w-3 text-gray-500 hover:text-blue-500" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          // Delete folder and move all chats to root
-                          const updatedChatFolders = {...chatFolders};
-                          Object.keys(updatedChatFolders).forEach(chatId => {
-                            if (updatedChatFolders[chatId] === folder.id) {
-                              delete updatedChatFolders[chatId];
-                            }
-                          });
-                          
-                          // Delete folder from backend
-                          deleteFolder(folder.id)
-                            .then(() => {
-                              setChatFolders(updatedChatFolders);
-                              setFolders(folders.filter(f => f.id !== folder.id));
-                            })
-                            .catch(err => console.error(`Failed to delete folder ${folder.id}:`, err));
-                        }}
-                      >
-                        <Trash2 className="h-3 w-3 text-gray-500 hover:text-red-500" />
-                      </Button>
-                    </div>
-                  </div>
-                  
-                  {/* Folder contents */}
-                  {folder.isExpanded && (
-                    <div className="pl-6 mt-1 space-y-1">
-                      {/* Chats in this folder */}
-                      {displayedChats
-                        .filter(chat => chatFolders[chat.id] === folder.id)
-                        .map((chat) => (
-                          <div key={chat.id} className="group relative mb-1">
-                            {/* Action buttons on the right */}
-                            <div className="absolute top-1/2 right-1 -translate-y-1/2 flex opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                              {/* Edit button */}
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-6 w-6 flex-shrink-0"
-                                onClick={(e) => handleEditChat(e, chat.id)}
-                                aria-label="Edit chat name"
-                              >
-                                <Edit2 className="h-3 w-3 text-gray-500 hover:text-blue-500" />
-                              </Button>
-                              
-                              {/* Delete button */}
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-6 w-6 flex-shrink-0"
-                                onClick={(e) => handleDeleteChat(e, chat.id)}
-                                aria-label="Delete chat"
-                              >
-                                <Trash2 className="h-3 w-3 text-gray-500 hover:text-red-500" />
-                              </Button>
-                            </div>
-                            
-                            {/* Chat content */}
-                            <div className="pt-1">
-                              {editingChatId === chat.id ? (
-                                // Editing mode
-                                <div className="w-full">
-                                  <Input
-                                    value={editingChatName}
-                                    onChange={(e) => setEditingChatName(e.target.value)}
-                                    onKeyDown={(e) => handleEditKeyPress(e, chat.id)}
-                                    onBlur={() => handleSaveChatName(chat.id)}
-                                    autoFocus
-                                    className="h-7 text-sm"
-                                  />
-                                </div>
-                              ) : (
-                                // Display mode
-                                <Button
-                                  variant="ghost"
-                                  className={cn(
-                                    "w-full justify-start text-sm h-7 py-1 px-2 text-left",
-                                    chat.id === activeChatId ? 'bg-gray-200 dark:bg-gray-700' : '',
-                                    draggedChatId === chat.id ? 'opacity-50' : ''
-                                  )}
-                                  onClick={() => handleSelectChat(chat.id)}
-                                  data-testid={`chat-button-${chat.id}`}
-                                  draggable
-                                  onDragStart={(e) => handleDragStart(e, chat.id, 'chat')}
-                                  onDragEnd={handleDragEnd}
-                                >
-                                  <span className="font-medium truncate block">
-                                    {chat.title || (chat.id.startsWith('new_') ? 'New Chat' : `Chat ${chat.id.substring(0, 8)}`)}
-                                  </span>
-                                </Button>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                    </div>
-                  )}
+                {folders.filter(folder => folder.parentId === null).map((folder) => (
+                  <SortableFolder key={folder.id} folder={folder} />
+                ))}
+              </SortableContext>
+              
+              {/* Chats not in folders */}
+              {isLoadingChats ? (
+                <div className="text-sm text-gray-400 dark:text-gray-500">Loading chats...</div>
+              ) : displayedChats.length === 0 ? (
+                <div className="text-sm text-gray-400 dark:text-gray-500">
+                  {searchQuery ? 'No matching chats found.' : (filterMode === 'all' ? 'No past chats found.' : `No ${filterMode} chats found.`)}
                 </div>
-              </div>
-            ))}
-            
-            {/* Chats not in folders */}
-            {isLoadingChats ? (
-              <div className="text-sm text-gray-400 dark:text-gray-500">Loading chats...</div>
-            ) : displayedChats.length === 0 ? (
-              <div className="text-sm text-gray-400 dark:text-gray-500">
-                {searchQuery ? 'No matching chats found.' : (filterMode === 'all' ? 'No past chats found.' : `No ${filterMode} chats found.`)}
-              </div>
-            ) : (
-              <div
-                className={cn(
-                  "mt-4",
-                  dropTargetId === 'root' ? 'ring-2 ring-blue-500 rounded-md p-1' : ''
-                )}
-                onDragOver={(e) => handleDragOver(e, 'root', 'root')}
-                onDrop={(e) => handleDrop(e, 'root', 'root')}
-              >
-                {displayedChats
-                  .filter(chat => !chatFolders[chat.id]) // Only show chats not in folders
-                  .map((chat) => (
-                  <div key={chat.id} className="group relative mb-3">
-                    {/* Action buttons on the right */}
-                    <div className="absolute top-1/2 right-1 -translate-y-1/2 flex opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                      {/* Edit button */}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6 flex-shrink-0"
-                        onClick={(e) => handleEditChat(e, chat.id)}
-                        aria-label="Edit chat name"
-                      >
-                        <Edit2 className="h-4 w-4 text-gray-500 hover:text-blue-500" />
-                      </Button>
-                      
-                      {/* Delete button */}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6 flex-shrink-0"
-                        onClick={(e) => handleDeleteChat(e, chat.id)}
-                        aria-label="Delete chat"
-                      >
-                        <Trash2 className="h-4 w-4 text-gray-500 hover:text-red-500" />
-                      </Button>
-                    </div>
-                    
-                    {/* Chat content */}
-                    <div className="pt-1">
-                      {editingChatId === chat.id ? (
-                        // Editing mode
-                        <div className="w-full">
-                          <Input
-                            value={editingChatName}
-                            onChange={(e) => setEditingChatName(e.target.value)}
-                            onKeyDown={(e) => handleEditKeyPress(e, chat.id)}
-                            onBlur={() => handleSaveChatName(chat.id)}
-                            autoFocus
-                            className="h-8 text-sm"
-                          />
-                        </div>
-                      ) : (
-                        // Display mode
-                        <Button
-                          variant="ghost"
-                          className={cn(
-                            "w-full justify-start text-sm h-auto py-2 px-2 text-left",
-                            chat.id === activeChatId ? 'bg-gray-200 dark:bg-gray-700' : '',
-                            draggedChatId === chat.id ? 'opacity-50' : ''
-                          )}
-                          onClick={() => handleSelectChat(chat.id)}
-                          data-testid={`chat-button-${chat.id}`}
-                          draggable
-                          onDragStart={(e) => handleDragStart(e, chat.id, 'chat')}
-                          onDragEnd={handleDragEnd}
-                        >
-                          <span className="font-medium truncate block">
-                            {chat.title || (chat.id.startsWith('new_') ? 'New Chat' : `Chat ${chat.id.substring(0, 8)}`)}
-                          </span>
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                  ))}
-              </div>
-            )}
+              ) : (
+                <div
+                  id="root"
+                  className="mt-4"
+                >
+                  <SortableContext
+                    items={displayedChats.filter(chat => !chatFolders[chat.id]).map(chat => chat.id)}
+                    strategy={verticalListSortingStrategy}
+                  >
+                    {displayedChats
+                      .filter(chat => !chatFolders[chat.id]) // Only show chats not in folders
+                      .map((chat) => (
+                        <SortableChat key={chat.id} chat={chat} />
+                      ))}
+                  </SortableContext>
+                </div>
+              )}
+            </DndContext>
           </div>
         </ScrollArea>
          {/* Settings Link */}
