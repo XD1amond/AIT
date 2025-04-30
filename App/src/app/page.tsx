@@ -72,7 +72,7 @@ export default function Home() {
   
   const [folders, setFolders] = useState<Folder[]>([]);
   const [chatFolders, setChatFolders] = useState<Record<string, string>>({});
-  const [showNewChatOptions, setShowNewChatOptions] = useState(false);
+  const [isHoveringNewOptions, setIsHoveringNewOptions] = useState(false); // State for hover dropdown
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
   const [editingFolderName, setEditingFolderName] = useState<string>('');
   
@@ -508,47 +508,46 @@ export default function Home() {
       <aside className="w-80 flex flex-col bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">
         <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
             <h1 className="text-xl font-semibold">AIT</h1>
+            {/* Container for Plus button and hover dropdown */}
             <div
               className="relative"
+              onMouseEnter={() => setIsHoveringNewOptions(true)}
+              onMouseLeave={() => setIsHoveringNewOptions(false)}
             >
+              {/* Plus button - creates new chat directly */}
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={() => {
                   handleNewChat();
-                  setShowNewChatOptions(false);
+                  setIsHoveringNewOptions(false); // Hide dropdown on click
                 }}
                 aria-label="New Chat"
               >
                 <Plus className="h-5 w-5" />
               </Button>
-              
-              {/* Dropdown menu for new chat/folder */}
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setShowNewChatOptions(!showNewChatOptions)}
-                aria-label="Show Options"
-              >
-                <ChevronDown className="h-4 w-4" />
-              </Button>
-              
-              {showNewChatOptions && (
+
+              {/* Hover Dropdown menu for new chat/folder */}
+              {isHoveringNewOptions && (
                 <div
                   className="absolute right-0 mt-1 w-40 bg-white dark:bg-gray-800 rounded-md shadow-lg z-50 border border-gray-200 dark:border-gray-700"
-                  onClick={(e) => e.stopPropagation()}
+                  // Keep dropdown open if mouse moves onto it
+                  onMouseEnter={() => setIsHoveringNewOptions(true)}
+                  onMouseLeave={() => setIsHoveringNewOptions(false)}
                 >
+                  {/* New Chat Option */}
                   <Button
                     variant="ghost"
                     className="w-full justify-start text-sm px-3 py-2"
                     onClick={() => {
                       handleNewChat();
-                      setShowNewChatOptions(false);
+                      setIsHoveringNewOptions(false); // Hide dropdown after action
                     }}
                   >
                     <PlusCircle className="h-4 w-4 mr-2" />
                     New Chat
                   </Button>
+                  {/* New Folder Option */}
                   <Button
                     variant="ghost"
                     className="w-full justify-start text-sm px-3 py-2"
@@ -563,7 +562,7 @@ export default function Home() {
                       }]);
                       setEditingFolderId(newFolderId);
                       setEditingFolderName('New Folder');
-                      setShowNewChatOptions(false);
+                      setIsHoveringNewOptions(false); // Hide dropdown after action
                     }}
                   >
                     <FolderIcon className="h-4 w-4 mr-2" />
