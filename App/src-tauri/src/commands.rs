@@ -12,6 +12,8 @@ use once_cell::sync::Lazy;
 static SETTINGS: Lazy<Mutex<Option<AppSettings>>> = Lazy::new(|| Mutex::new(None));
 // Global chats storage
 static CHATS: Lazy<Mutex<Vec<RustSavedChat>>> = Lazy::new(|| Mutex::new(Vec::new()));
+// Global folders storage
+static FOLDERS: Lazy<Mutex<Vec<RustFolder>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OsInfo {
@@ -81,6 +83,16 @@ pub struct RustSavedChat {
     pub mode: String, // "action" or "walkthrough"
     pub messages: Vec<ChatMessage>,
     pub title: Option<String>,
+}
+
+// Folder structure
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RustFolder {
+    pub id: String,
+    pub name: String,
+    pub timestamp: u64,
+    pub parent_id: Option<String>,
+    pub is_expanded: bool,
 }
 
 // Get current working directory
@@ -212,6 +224,19 @@ fn get_chats_path(app_handle: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|e| format!("Failed to create app data directory: {}", e))?;
         
     Ok(data_dir.join("chats.json"))
+}
+
+// Helper function to get the folders file path
+fn get_folders_path(app_handle: &AppHandle) -> Result<PathBuf, String> {
+    // Use ok_or_else to convert Option<PathBuf> to Result<PathBuf, String>
+    let data_dir = app_handle.path().app_data_dir()
+        .or_else(|_| Err("Failed to get app data directory".to_string()))?;
+    
+    // Ensure the directory exists
+    create_dir_all(&data_dir)
+        .map_err(|e| format!("Failed to create app data directory: {}", e))?;
+        
+    Ok(data_dir.join("folders.json"))
 }
 
 // Get settings
@@ -409,6 +434,184 @@ pub fn delete_chat(app_handle: AppHandle, chat_id: String) -> Result<(), String>
             Err(e) => Err(format!("Failed to write chats file after deletion: {}", e)),
         },
         Err(e) => Err(format!("Failed to serialize chats after deletion: {}", e)),
+    }
+}
+
+// Get all folders
+#[command]
+pub fn get_all_folders(app_handle: AppHandle) -> Vec<RustFolder> {
+    // Try to get folders from memory first
+    let mut folders_guard = FOLDERS.lock().unwrap();
+
+    // If folders are already loaded in memory, return them
+    if !folders_guard.is_empty() {
+        println!("Returning folders from memory cache: {} folders", folders_guard.len());
+        return folders_guard.clone();
+    }
+
+    // If not in memory, try to load from file
+    let folders_path = match get_folders_path(&app_handle) {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("Error getting folders path: {}", e);
+            return Vec::new(); // Return empty vector if path resolution fails
+        }
+    };
+
+    println!("Attempting to load folders from: {:?}", folders_path);
+    let folders = if folders_path.exists() {
+        match fs::read_to_string(&folders_path) {
+            Ok(json) => match serde_json::from_str::<Vec<RustFolder>>(&json) {
+                Ok(loaded_folders) => {
+                    println!("Successfully loaded {} folders from file.", loaded_folders.len());
+                    loaded_folders
+                },
+                Err(e) => {
+                    eprintln!("Failed to parse folders file: {}. Using empty list.", e);
+                    Vec::new()
+                },
+            },
+            Err(e) => {
+                eprintln!("Failed to read folders file: {}. Using empty list.", e);
+                Vec::new()
+            },
+        }
+    } else {
+        println!("Folders file not found. Using empty list.");
+        Vec::new()
+    };
+
+    // Store in memory for future use
+    *folders_guard = folders.clone();
+
+    // Sort by timestamp (newest first) before returning
+    let mut sorted_folders = folders.clone();
+    sorted_folders.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    println!("Returning {} sorted folders", sorted_folders.len());
+    sorted_folders
+}
+
+// Save a folder
+#[command]
+pub fn save_folder(app_handle: AppHandle, folder: RustFolder) -> Result<(), String> {
+    println!("Saving folder with ID: {}, Name: {}", folder.id, folder.name);
+    
+    // Get the current folders
+    let mut folders_guard = FOLDERS.lock().unwrap();
+    
+    // Check if this folder already exists
+    let existing_index = folders_guard.iter().position(|f| f.id == folder.id);
+    
+    // Update or add the folder
+    if let Some(index) = existing_index {
+        // Update existing folder
+        println!("Updating existing folder at index {}", index);
+        folders_guard[index] = folder.clone();
+    } else {
+        // Add new folder
+        println!("Adding new folder");
+        folders_guard.push(folder.clone());
+    }
+    
+    // Sort by timestamp (newest first)
+    folders_guard.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    
+    // Save to file
+    let folders_path = get_folders_path(&app_handle)?;
+    println!("Saving folders to path: {:?}", folders_path);
+    
+    // Ensure parent directory exists
+    if let Some(parent) = folders_path.parent() {
+        if !parent.exists() {
+            println!("Creating parent directory: {:?}", parent);
+            create_dir_all(parent)
+                .map_err(|e| format!("Failed to create parent directory: {}", e))?;
+        }
+    }
+    
+    // Debug: Print the folders being saved
+    println!("Saving {} folders: {:?}", folders_guard.len(), folders_guard);
+    
+    match serde_json::to_string_pretty(&*folders_guard) {
+        Ok(json) => {
+            println!("Serialized JSON: {}", json);
+            match fs::write(&folders_path, &json) {
+                Ok(_) => {
+                    println!("Folders saved successfully to {:?}", folders_path);
+                    // Verify the file was written
+                    match fs::read_to_string(&folders_path) {
+                        Ok(content) => {
+                            println!("Verified file content: {}", content);
+                            Ok(())
+                        },
+                        Err(e) => {
+                            eprintln!("Warning: Could not verify file content: {}", e);
+                            Ok(()) // Still return Ok since the write succeeded
+                        }
+                    }
+                },
+                Err(e) => Err(format!("Failed to write folders file: {}", e)),
+            }
+        },
+        Err(e) => Err(format!("Failed to serialize folders: {}", e)),
+    }
+}
+
+// Delete a folder
+#[command]
+pub fn delete_folder(app_handle: AppHandle, folder_id: String) -> Result<(), String> {
+    println!("Deleting folder with ID: {}", folder_id);
+    
+    // Get the current folders
+    let mut folders_guard = FOLDERS.lock().unwrap();
+    println!("Current folders before deletion: {:?}", folders_guard);
+    
+    // Remove the folder with the given ID
+    let initial_len = folders_guard.len();
+    folders_guard.retain(|f| f.id != folder_id);
+    
+    // Check if a folder was actually removed
+    if folders_guard.len() == initial_len {
+        return Err(format!("Folder with ID {} not found", folder_id));
+    }
+    
+    println!("Folder removed from memory. Remaining folders: {:?}", folders_guard);
+    
+    // Save to file
+    let folders_path = get_folders_path(&app_handle)?;
+    println!("Saving updated folders to path: {:?}", folders_path);
+    
+    // Ensure parent directory exists
+    if let Some(parent) = folders_path.parent() {
+        if !parent.exists() {
+            println!("Creating parent directory: {:?}", parent);
+            create_dir_all(parent)
+                .map_err(|e| format!("Failed to create parent directory: {}", e))?;
+        }
+    }
+    
+    match serde_json::to_string_pretty(&*folders_guard) {
+        Ok(json) => {
+            println!("Serialized JSON after deletion: {}", json);
+            match fs::write(&folders_path, &json) {
+                Ok(_) => {
+                    println!("Folders saved successfully after deletion to {:?}", folders_path);
+                    // Verify the file was written
+                    match fs::read_to_string(&folders_path) {
+                        Ok(content) => {
+                            println!("Verified file content after deletion: {}", content);
+                            Ok(())
+                        },
+                        Err(e) => {
+                            eprintln!("Warning: Could not verify file content after deletion: {}", e);
+                            Ok(()) // Still return Ok since the write succeeded
+                        }
+                    }
+                },
+                Err(e) => Err(format!("Failed to write folders file after deletion: {}", e)),
+            }
+        },
+        Err(e) => Err(format!("Failed to serialize folders after deletion: {}", e)),
     }
 }
 

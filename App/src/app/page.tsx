@@ -12,7 +12,7 @@ import { Settings, PlusCircle, Filter, SortAsc, SortDesc, Search, Trash2, Edit2,
 import { Button } from '@/components/ui/button';
 import Link from 'next/link';
 import { saveChat, deleteChat, SavedChat, generateChatId, getAllSavedChats } from '@/lib/chat-storage';
-import { saveFolders, loadFolders, saveChatFolders, loadChatFolders, generateFolderId } from '@/lib/folder-storage';
+import { saveFolder, getAllFolders, deleteFolder, saveChatFolders, loadChatFolders, generateFolderId } from '@/lib/folder-storage';
 import { Folder } from '@/shared/models';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"; // Added Select imports
 import { Input } from "@/components/ui/input";
@@ -92,6 +92,21 @@ export default function Home() {
   const [initialLoadError, setInitialLoadError] = useState<string | null>(null);
 
 
+  // Load folders and chat-folder mappings
+  const loadFolderData = async () => {
+    try {
+      console.log("Loading folders from backend...");
+      const savedFolders = await getAllFolders();
+      console.log("Folders loaded:", savedFolders);
+      const savedChatFolders = loadChatFolders();
+      setFolders(savedFolders);
+      setChatFolders(savedChatFolders);
+    } catch (error) {
+      console.error("Error loading folders:", error);
+      setFolders([]);
+    }
+  };
+
   // Load chats, settings, and CWD on initial mount
   useEffect(() => {
     const loadInitialData = async () => {
@@ -161,22 +176,15 @@ export default function Home() {
         } finally {
             setIsLoadingChats(false);
             setIsLoadingSettings(false);
+            
+            // Load folders after other data is loaded
+            await loadFolderData();
         }
     };
 
     // Delay slightly to ensure Tauri API is ready (might not be strictly necessary with isTauri check)
     const timer = setTimeout(loadInitialData, 50);
     return () => clearTimeout(timer); // Cleanup timer
-
-    // Load folders and chat-folder mappings
-    const loadFolderData = () => {
-      const savedFolders = loadFolders();
-      const savedChatFolders = loadChatFolders();
-      setFolders(savedFolders);
-      setChatFolders(savedChatFolders);
-    };
-    
-    loadFolderData();
   }, []); // Empty dependency array ensures this runs only once on mount
 
 
@@ -335,7 +343,18 @@ export default function Home() {
   
   // Save folders whenever they change
   useEffect(() => {
-    saveFolders(folders);
+    // Save each folder individually
+    const saveAllFolders = async () => {
+      for (const folder of folders) {
+        try {
+          await saveFolder(folder);
+        } catch (error) {
+          console.error(`Error saving folder ${folder.id}:`, error);
+        }
+      }
+    };
+    
+    saveAllFolders();
   }, [folders]);
   
   // Save chat-folder mappings whenever they change
@@ -554,12 +573,25 @@ export default function Home() {
                     onClick={() => {
                       // Create a new folder
                       const newFolderId = generateFolderId();
-                      setFolders([...folders, {
+                      const newFolder = {
                         id: newFolderId,
                         name: 'New Folder',
                         parentId: null,
                         isExpanded: true
-                      }]);
+                      };
+                      
+                      console.log("Creating new folder:", newFolder);
+                      
+                      // Save the new folder to backend
+                      saveFolder(newFolder)
+                        .then(() => {
+                          console.log("Folder saved successfully, updating state");
+                          setFolders(prevFolders => [...prevFolders, newFolder]);
+                        })
+                        .catch(err => {
+                          console.error("Failed to save new folder:", err);
+                          alert("Failed to save folder. Please try again.");
+                        });
                       setEditingFolderId(newFolderId);
                       setEditingFolderName('New Folder');
                       setIsHoveringNewOptions(false); // Hide dropdown after action
@@ -641,9 +673,24 @@ export default function Home() {
                       size="icon"
                       className="h-6 w-6 p-0"
                       onClick={() => {
+                        const updatedFolder = {
+                          ...folders.find(f => f.id === folder.id)!,
+                          isExpanded: !folders.find(f => f.id === folder.id)!.isExpanded
+                        };
+                        
+                        // Update state immediately for responsive UI
                         setFolders(folders.map(f =>
                           f.id === folder.id ? {...f, isExpanded: !f.isExpanded} : f
                         ));
+                        
+                        // Save the updated folder to backend
+                        saveFolder(updatedFolder)
+                          .then(() => {
+                            console.log("Folder expansion state updated successfully");
+                          })
+                          .catch(err => {
+                            console.error("Failed to update folder expansion state:", err);
+                          });
                       }}
                     >
                       {folder.isExpanded ?
@@ -659,19 +706,48 @@ export default function Home() {
                         onChange={(e) => setEditingFolderName(e.target.value)}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter') {
-                            setFolders(folders.map(f =>
-                              f.id === folder.id ? {...f, name: editingFolderName} : f
-                            ));
-                            setEditingFolderId(null);
+                            const updatedFolder = {
+                              ...folders.find(f => f.id === folder.id)!,
+                              name: editingFolderName
+                            };
+                            
+                            // Save the updated folder to backend
+                            saveFolder(updatedFolder)
+                              .then(() => {
+                                console.log("Folder name updated successfully");
+                                setFolders(folders.map(f =>
+                                  f.id === folder.id ? {...f, name: editingFolderName} : f
+                                ));
+                                setEditingFolderId(null);
+                              })
+                              .catch(err => {
+                                console.error("Failed to update folder name:", err);
+                                alert("Failed to update folder name. Please try again.");
+                                setEditingFolderId(null);
+                              });
                           } else if (e.key === 'Escape') {
                             setEditingFolderId(null);
                           }
                         }}
                         onBlur={() => {
-                          setFolders(folders.map(f =>
-                            f.id === folder.id ? {...f, name: editingFolderName} : f
-                          ));
-                          setEditingFolderId(null);
+                          const updatedFolder = {
+                            ...folders.find(f => f.id === folder.id)!,
+                            name: editingFolderName
+                          };
+                          
+                          // Save the updated folder to backend
+                          saveFolder(updatedFolder)
+                            .then(() => {
+                              console.log("Folder name updated successfully on blur");
+                              setFolders(folders.map(f =>
+                                f.id === folder.id ? {...f, name: editingFolderName} : f
+                              ));
+                              setEditingFolderId(null);
+                            })
+                            .catch(err => {
+                              console.error("Failed to update folder name on blur:", err);
+                              setEditingFolderId(null);
+                            });
                         }}
                         autoFocus
                         className="h-7 text-sm ml-1 flex-1"
@@ -681,9 +757,24 @@ export default function Home() {
                         variant="ghost"
                         className="h-7 flex-1 justify-start text-sm px-2"
                         onClick={() => {
+                          const updatedFolder = {
+                            ...folders.find(f => f.id === folder.id)!,
+                            isExpanded: !folders.find(f => f.id === folder.id)!.isExpanded
+                          };
+                          
+                          // Update state immediately for responsive UI
                           setFolders(folders.map(f =>
                             f.id === folder.id ? {...f, isExpanded: !f.isExpanded} : f
                           ));
+                          
+                          // Save the updated folder to backend
+                          saveFolder(updatedFolder)
+                            .then(() => {
+                              console.log("Folder expansion state updated successfully (from name click)");
+                            })
+                            .catch(err => {
+                              console.error("Failed to update folder expansion state (from name click):", err);
+                            });
                         }}
                       >
                         <FolderIcon className="h-4 w-4 mr-2 text-gray-500" />
@@ -718,8 +809,14 @@ export default function Home() {
                               delete updatedChatFolders[chatId];
                             }
                           });
-                          setChatFolders(updatedChatFolders);
-                          setFolders(folders.filter(f => f.id !== folder.id));
+                          
+                          // Delete folder from backend
+                          deleteFolder(folder.id)
+                            .then(() => {
+                              setChatFolders(updatedChatFolders);
+                              setFolders(folders.filter(f => f.id !== folder.id));
+                            })
+                            .catch(err => console.error(`Failed to delete folder ${folder.id}:`, err));
                         }}
                       >
                         <Trash2 className="h-3 w-3 text-gray-500 hover:text-red-500" />
