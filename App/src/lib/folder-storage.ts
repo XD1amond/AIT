@@ -11,6 +11,7 @@ interface RustFolderPayload {
   timestamp: number; // Send number, Rust expects u64
   parent_id: string | null; // Matches Rust's Option<String>
   is_expanded: boolean;
+  order: number;
 }
 
 // Interface matching the Rust backend's RustFolder structure
@@ -20,6 +21,7 @@ export interface FolderWithTimestamp {
   timestamp: number;
   parent_id: string | null;
   is_expanded: boolean;
+  order: number;
 }
 
 /**
@@ -37,14 +39,13 @@ export async function getAllFolders(): Promise<Folder[]> {
     console.log("Folders received from backend:", folders);
     
     // Convert from Rust naming convention to TypeScript naming convention
-    return folders
-      .sort((a, b) => b.timestamp - a.timestamp)
-      .map(folder => ({
-        id: folder.id,
-        name: folder.name,
-        parentId: folder.parent_id,
-        isExpanded: folder.is_expanded
-      }));
+    return folders.map(folder => ({
+      id: folder.id,
+      name: folder.name,
+      parentId: folder.parent_id,
+      isExpanded: folder.is_expanded,
+      order: folder.order
+    }));
   } catch (error) {
     console.error("Error loading folders via invoke:", error);
     return []; // Return empty array on error
@@ -69,7 +70,8 @@ export async function saveFolder(folder: Folder): Promise<void> {
       name: folder.name,
       timestamp: Date.now(),
       parent_id: folder.parentId,
-      is_expanded: folder.isExpanded || false
+      is_expanded: folder.isExpanded || false,
+      order: folder.order || 0
     };
     
     console.log("Sending folder payload to backend:", payload);

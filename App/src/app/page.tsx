@@ -32,7 +32,8 @@ import {
   SortableContext,
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
-  useSortable
+  useSortable,
+  arrayMove // Import arrayMove
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
@@ -75,7 +76,7 @@ export default function Home() {
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [activeChatMessages, setActiveChatMessages] = useState<ChatMessage[]>([]);
   const [filterMode, setFilterMode] = useState<'all' | 'action' | 'walkthrough'>('all'); // Filter state
-  const [sortOrder, setSortOrder] = useState<'custom' | 'newest' | 'oldest'>('custom'); // Sort state
+  const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest'); // Sort state
   const [searchQuery, setSearchQuery] = useState<string>(''); // Search state
   const [editingChatId, setEditingChatId] = useState<string | null>(null); // State for tracking which chat is being edited
   const [editingChatName, setEditingChatName] = useState<string>(''); // State for the edited chat name
@@ -86,6 +87,7 @@ export default function Home() {
     name: string;
     parentId: string | null;
     isExpanded: boolean;
+    order?: number;
   }
   
   const [folders, setFolders] = useState<Folder[]>([]);
@@ -97,8 +99,7 @@ export default function Home() {
   // DnD state
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeType, setActiveType] = useState<'chat' | 'folder' | null>(null);
-  const [overFolderId, setOverFolderId] = useState<string | null>(null);
-  const [isSorting, setIsSorting] = useState<boolean>(false);
+  const [overFolderId, setOverFolderId] = useState<string | null>(null); // Tracks if hovering OVER a folder for nesting visual cue
   
   // State for mode switching
   const [previousMode, setPreviousMode] = useState<Mode | null>(null);
@@ -265,11 +266,9 @@ export default function Home() {
                 if (remainingChats.length > 0) {
                     // Sort remaining chats according to current sort order and select the first one
                     let sortedRemaining = [...remainingChats];
-                    if (sortOrder !== 'custom') {
-                      sortedRemaining = remainingChats.sort((a, b) =>
-                        sortOrder === 'newest' ? b.timestamp - a.timestamp : a.timestamp - b.timestamp
-                      );
-                    }
+                    sortedRemaining = remainingChats.sort((a, b) =>
+                      sortOrder === 'newest' ? b.timestamp - a.timestamp : a.timestamp - b.timestamp
+                    );
                     const nextActiveChat = sortedRemaining[0];
                     setActiveChatId(nextActiveChat.id);
                     setActiveChatMessages(nextActiveChat.messages);
@@ -344,7 +343,7 @@ export default function Home() {
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
-        distance: 8,
+        distance: 3, // Reduced distance to make dragging easier
       },
     }),
     useSensor(KeyboardSensor, {
@@ -359,99 +358,180 @@ export default function Home() {
     
     setActiveId(id);
     setActiveType(type);
+    setOverFolderId(null); // Reset over folder state on new drag start
   }, []);
 
+  // Update overFolderId for visual feedback (highlighting potential drop target)
   const handleDragOver = useCallback((event: DragOverEvent) => {
-    const { over } = event;
+    const { over, active } = event;
+    const overId = over?.id?.toString();
+    const activeId = active.id.toString();
     
-    if (over && over.id.toString().startsWith('folder_')) {
-      setOverFolderId(over.id.toString());
+    // Only set overFolderId if hovering over a different folder
+    if (overId?.startsWith('folder_') && overId !== activeId) {
+      setOverFolderId(overId);
     } else {
       setOverFolderId(null);
     }
   }, []);
   
+  // Main drag end logic
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event;
-    
-    if (over) {
-      const activeId = active.id.toString();
-      const overId = over.id.toString();
-      
-      if (activeType === 'chat') {
-        // Moving a chat
-        if (overId.startsWith('folder_')) {
-          // Move chat to folder
-          setChatFolders(prev => {
-            const newMapping = {...prev, [activeId]: overId};
-            console.log("Moving chat to folder:", activeId, "to", overId, newMapping);
-            saveChatFolders(newMapping); // Explicitly save the updated mapping
-            return newMapping;
-          });
-        } else if (overId === 'root' || activeId !== overId) {
-          // Move chat to root or reorder
-          setChatFolders(prev => {
-            const newMapping = {...prev};
-            delete newMapping[activeId];
-            console.log("Moving chat to root:", activeId, newMapping);
-            saveChatFolders(newMapping); // Explicitly save the updated mapping
-            return newMapping;
-          });
-        }
-      } else if (activeType === 'folder') {
-        // Moving a folder
-        if (overId.startsWith('folder_') && activeId !== overId) {
-          // Move folder to another folder (create subfolder)
-          setFolders(prev =>
-            prev.map(folder =>
-              folder.id === activeId ? {...folder, parentId: overId} : folder
-            )
-          );
-        } else if (overId === 'root') {
-          // Move folder to root
-          setFolders(prev =>
-            prev.map(folder =>
-              folder.id === activeId ? {...folder, parentId: null} : folder
-            )
-          );
-        }
-      }
-    }
-    
+
+    // Reset active drag states
     setActiveId(null);
     setActiveType(null);
-    setOverFolderId(null);
-  }, [activeType]);
-  
-  // Save folders whenever they change
-  useEffect(() => {
-    // Save each folder individually
-    const saveAllFolders = async () => {
-      for (const folder of folders) {
-        try {
-          await saveFolder(folder);
-        } catch (error) {
-          console.error(`Error saving folder ${folder.id}:`, error);
-        }
-      }
-    };
     
-    saveAllFolders();
-  }, [folders]);
-  
-  // Save chat-folder mappings whenever they change
-  useEffect(() => {
-    console.log("Saving chat-folder mappings:", chatFolders);
-    saveChatFolders(chatFolders);
-  }, [chatFolders]);
-  
-  // Reload folder data when chats change
-  useEffect(() => {
-    if (savedChats.length > 0) {
-      console.log("Chats changed, reloading folder data");
-      loadFolderData();
+    if (!over || active.id === over.id) {
+      setOverFolderId(null);
+      return; // No movement or dropped on itself
     }
-  }, [savedChats]);
+
+    const activeId = active.id.toString();
+    const overId = over.id.toString();
+
+    // --- Chat Drag Logic ---
+    if (activeType === 'chat') {
+      let targetFolderId: string | null = null;
+
+      // Only nest if we're hovering over a folder and it's highlighted (overFolderId is set)
+      if (overId.startsWith('folder_') && overId === overFolderId) {
+        // Dropped onto a folder with intent to nest -> Nest
+        targetFolderId = overId;
+        console.log(`Chat ${activeId} dropped into folder ${targetFolderId} (nesting)`);
+      } else {
+        // Dropped onto root, another chat, or empty space -> Move to root
+        targetFolderId = null;
+        console.log(`Chat ${activeId} dropped into root or reordered`);
+      }
+
+      // Update chatFolders state if the folder changes
+      if (chatFolders[activeId] !== targetFolderId) {
+        setChatFolders(prev => {
+          const newMapping = { ...prev };
+          if (targetFolderId) {
+            newMapping[activeId] = targetFolderId;
+          } else {
+            delete newMapping[activeId]; // Remove from mapping if moved to root
+          }
+          console.log("Updating chatFolders state:", newMapping);
+          saveChatFolders(newMapping); // Save the updated mapping
+          return newMapping;
+        });
+      } else {
+        console.log(`Chat ${activeId} folder unchanged.`);
+        // Note: Reordering chats within the same folder/root is handled visually by dnd-kit
+        // We don't persist chat order within folders/root currently.
+      }
+    }
+    // --- Folder Drag Logic ---
+    else if (activeType === 'folder') {
+      setFolders(prevFolders => {
+        const oldIndex = prevFolders.findIndex(f => f.id === activeId);
+        const newIndex = prevFolders.findIndex(f => f.id === overId);
+        
+        if (oldIndex === -1) {
+          console.error(`Dragged folder ${activeId} not found!`);
+          return prevFolders;
+        }
+
+        const activeFolder = prevFolders[oldIndex];
+        
+        // Simple case: nesting a folder inside another folder
+        if (overId.startsWith('folder_') && overId !== activeId && overId === overFolderId) {
+          // Prevent circular references
+          let isDescendant = false;
+          let currentId: string | null = overId;
+          
+          while (currentId) {
+            if (currentId === activeId) {
+              isDescendant = true;
+              break;
+            }
+            
+            const parent = prevFolders.find(f => f.id === currentId);
+            currentId = parent?.parentId || null;
+          }
+          
+          if (isDescendant) {
+            console.warn(`Cannot nest folder ${activeId} inside its descendant ${overId}`);
+            return prevFolders;
+          }
+          
+          // Update the parent ID
+          const updatedFolders = prevFolders.map(folder =>
+            folder.id === activeId ? { ...folder, parentId: overId } : folder
+          );
+          
+          // Save the updated folder
+          const updatedFolder = updatedFolders.find(f => f.id === activeId);
+          if (updatedFolder) {
+            saveFolder(updatedFolder)
+              .catch(err => console.error(`Error saving folder ${activeId}:`, err));
+          }
+          
+          return updatedFolders;
+        }
+        // Simple case: reordering folders
+        else if (newIndex !== -1 && oldIndex !== newIndex) {
+          // Move the folder in the array
+          const reorderedFolders = arrayMove(prevFolders, oldIndex, newIndex);
+          
+          // Update order for all siblings
+          const parentId = activeFolder.parentId;
+          const siblings = reorderedFolders.filter(f => f.parentId === parentId);
+          
+          const updatedFolders = reorderedFolders.map(folder => {
+            if (folder.parentId === parentId) {
+              const index = siblings.findIndex(s => s.id === folder.id);
+              return { ...folder, order: index };
+            }
+            return folder;
+          });
+          
+          // Save all affected folders
+          updatedFolders
+            .filter(folder => folder.parentId === parentId)
+            .forEach(folder => {
+              saveFolder(folder)
+                .catch(err => console.error(`Error saving folder ${folder.id}:`, err));
+            });
+          
+          return updatedFolders;
+        }
+        // Moving to root
+        else if (overId === 'root' || overId.startsWith('chat_')) {
+          // Only update if not already at root
+          if (activeFolder.parentId !== null) {
+            const updatedFolders = prevFolders.map(folder =>
+              folder.id === activeId ? { ...folder, parentId: null } : folder
+            );
+            
+            // Save the updated folder
+            const updatedFolder = updatedFolders.find(f => f.id === activeId);
+            if (updatedFolder) {
+              saveFolder(updatedFolder)
+                .catch(err => console.error(`Error saving folder ${activeId}:`, err));
+            }
+            
+            return updatedFolders;
+          }
+        }
+        
+        // Default: no change
+        return prevFolders;
+      });
+    }
+    
+    // Finally clear the states
+    setOverFolderId(null);
+  }, [activeType, folders, chatFolders]); // Dependencies
+
+
+  // Removed useEffect that automatically saved chatFolders on change. Saving is now handled explicitly in handleDragEnd.
+  
+  // Removed useEffect that reloaded folder data on savedChats change to prevent overwriting state
   
   // Function to render a sortable folder
   const SortableFolder = ({ folder }: { folder: Folder }) => {
@@ -469,7 +549,11 @@ export default function Home() {
       transition,
       opacity: isDragging ? 0.5 : 1,
       zIndex: isDragging ? 999 : 'auto',
-      ...(isDragging ? { position: 'relative' as const } : {}),
+      // Fix for horizontal scrolling
+      position: isDragging ? 'absolute' as const : 'static' as const,
+      width: isDragging ? 'calc(100% - 16px)' : 'auto',
+      left: 0,
+      right: 0
     };
     
     return (
@@ -477,11 +561,28 @@ export default function Home() {
         ref={setNodeRef}
         style={style}
         className={cn(
-          "mb-2",
-          overFolderId === folder.id ? 'ring-2 ring-blue-500 rounded-md' : ''
+          "mb-2 relative",
+          // Apply highlight when hovering over this folder
+          overFolderId === folder.id && activeId !== folder.id
+            ? 'ring-2 ring-blue-500 rounded-md bg-blue-50 dark:bg-blue-900/20 transition-all duration-200 scale-105' // Highlight when hovering
+            : '',
+          isDragging ? 'z-50' : 'z-auto' // Ensure dragging element is on top
         )}
       >
-        <div className="group relative">
+        {/* Overlay to improve drop target area */}
+        {activeId && activeId !== folder.id && (
+          <div className="absolute inset-0 z-10 pointer-events-none" />
+        )}
+        
+        {/* Visual indicator for nesting */}
+        {overFolderId === folder.id && activeId !== folder.id && (
+          <div className="absolute inset-0 border-2 border-dashed border-blue-500 rounded-md z-20 pointer-events-none flex items-center justify-center">
+            <div className="bg-blue-100 dark:bg-blue-900/50 px-2 py-1 rounded text-xs font-medium text-blue-800 dark:text-blue-200">
+              Drop to nest
+            </div>
+          </div>
+        )}
+        <div className="group">
           {/* Folder header with expand/collapse */}
           <div className="flex items-center">
             <Button
@@ -574,6 +675,7 @@ export default function Home() {
                 className="h-7 flex-1 justify-start text-sm px-2"
                 {...attributes}
                 {...listeners}
+                data-folder-id={folder.id}
                 onClick={() => {
                   const updatedFolder = {
                     ...folders.find(f => f.id === folder.id)!,
@@ -686,15 +788,29 @@ export default function Home() {
       transition,
       opacity: isDragging ? 0.5 : 1,
       zIndex: isDragging ? 999 : 'auto',
-      ...(isDragging ? { position: 'relative' as const } : {}),
+      // Fix for horizontal scrolling
+      position: isDragging ? 'absolute' as const : 'static' as const,
+      width: isDragging ? 'calc(100% - 16px)' : 'auto',
+      left: 0,
+      right: 0
     };
-    
+
     return (
       <div
         ref={setNodeRef}
         style={style}
-        className="group relative mb-1 flex items-center"
+        className={cn(
+          "group relative mb-1 flex items-center",
+          isDragging ? 'z-50' : 'z-auto', // Ensure dragging element is on top
+          overFolderId && activeId === chat.id ? 'ring-2 ring-green-500 rounded-md' : '' // Highlight when being dragged over a folder
+        )}
       >
+        {/* Visual indicator when being dragged over a folder */}
+        {overFolderId && activeId === chat.id && (
+          <div className="absolute right-2 top-0 bg-green-100 dark:bg-green-900/50 px-2 py-1 rounded text-xs font-medium text-green-800 dark:text-green-200 z-20">
+            Will be moved to folder
+          </div>
+        )}
         {/* Chat content - main part */}
         <div className="flex-grow">
           {/* Chat content */}
@@ -807,16 +923,14 @@ export default function Home() {
             newChats = [chatToSave, ...chatsWithoutPlaceholder];
           }
 
-          // Re-sort based on current sort order
-          if (sortOrder !== 'custom') {
-            return newChats.sort((a, b) => {
-              if (sortOrder === 'newest') {
-                return b.timestamp - a.timestamp;
-              } else {
-                return a.timestamp - b.timestamp;
-              }
-            });
-          }
+          // Always sort based on current sort order
+          return newChats.sort((a, b) => {
+            if (sortOrder === 'newest') {
+              return b.timestamp - a.timestamp;
+            } else {
+              return a.timestamp - b.timestamp;
+            }
+          });
           return newChats;
         });
 
@@ -861,16 +975,14 @@ export default function Home() {
       });
     }
 
-    // Apply sort
-    if (sortOrder !== 'custom') {
-      chats.sort((a, b) => {
-        if (sortOrder === 'newest') {
-          return b.timestamp - a.timestamp;
-        } else {
-          return a.timestamp - b.timestamp;
-        }
-      });
-    }
+    // Always apply sort
+    chats.sort((a, b) => {
+      if (sortOrder === 'newest') {
+        return b.timestamp - a.timestamp;
+      } else {
+        return a.timestamp - b.timestamp;
+      }
+    });
 
     return chats;
   }, [savedChats, filterMode, sortOrder, searchQuery]);
@@ -955,10 +1067,12 @@ export default function Home() {
               )}
             </div>
         </div>
-        {/* Removed erroneous ScrollArea tag */}
-        <ScrollArea className="flex-1 overflow-x-hidden">
+        {/* Apply strict overflow control to prevent horizontal scrolling */}
+        <ScrollArea className="flex-1 overflow-hidden">
+          <div className="overflow-x-hidden overflow-y-auto h-full w-full">
           {/* Add data-testid for easier selection in tests */}
-          <div data-testid="chat-list" className="p-4 space-y-2 overflow-x-hidden">
+          {/* Ensure this inner div does not counteract the overflow setting */}
+          <div data-testid="chat-list" className="p-4 space-y-2">
             {/* Search Bar */}
                     <div className="relative mb-3">
                       <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -984,15 +1098,13 @@ export default function Home() {
                     <SelectItem value="action">Action</SelectItem>
                  </SelectContent>
                </Select>
-               <Select value={sortOrder} onValueChange={(value: string) => setSortOrder(value as 'custom' | 'newest' | 'oldest')}>
+               <Select value={sortOrder} onValueChange={(value: string) => setSortOrder(value as 'newest' | 'oldest')}>
                  <SelectTrigger className="h-8 text-xs flex-1" aria-label="Sort chats by date">
                     {sortOrder === 'newest' ? <SortDesc className="h-3 w-3 mr-1 inline-block" /> :
-                     sortOrder === 'oldest' ? <SortAsc className="h-3 w-3 mr-1 inline-block" /> :
-                     <Filter className="h-3 w-3 mr-1 inline-block" />}
+                     <SortAsc className="h-3 w-3 mr-1 inline-block" />}
                     <SelectValue placeholder="Sort" />
                  </SelectTrigger>
                  <SelectContent>
-                    <SelectItem value="custom">Custom Order</SelectItem>
                     <SelectItem value="newest">Newest First</SelectItem>
                     <SelectItem value="oldest">Oldest First</SelectItem>
                  </SelectContent>
@@ -1043,6 +1155,7 @@ export default function Home() {
                 </div>
               )}
             </DndContext>
+          </div>
           </div>
         </ScrollArea>
          {/* Settings Link */}

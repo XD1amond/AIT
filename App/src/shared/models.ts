@@ -463,4 +463,10 @@ export interface Folder {
   name: string;
   parentId: string | null;
   isExpanded: boolean;
+  order?: number;
+}
+
+// Interface for folder with order information
+export interface FolderWithOrder extends Folder {
+  order: number;
 }
