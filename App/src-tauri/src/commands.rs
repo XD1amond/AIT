@@ -620,10 +620,14 @@ pub fn delete_folder(app_handle: AppHandle, folder_id: String) -> Result<(), Str
 pub async fn execute_command(command: String, cwd: Option<String>) -> Result<String, String> {
     let cwd = cwd.unwrap_or_else(|| get_cwd());
     
+    println!("Executing command: '{}' in directory: '{}'", command, cwd);
+    
     // Split the command into program and arguments
     let mut parts = command.split_whitespace();
     let program = parts.next().ok_or_else(|| "Empty command".to_string())?;
     let args: Vec<&str> = parts.collect();
+    
+    println!("Program: '{}', Args: {:?}", program, args);
     
     // Create the command
     let mut cmd = Command::new(program);
@@ -631,7 +635,10 @@ pub async fn execute_command(command: String, cwd: Option<String>) -> Result<Str
     
     // Set the working directory if it exists
     if Path::new(&cwd).exists() {
-        cmd.current_dir(cwd);
+        cmd.current_dir(&cwd);
+        println!("Working directory set to: '{}'", cwd);
+    } else {
+        println!("Warning: Directory '{}' does not exist, using current directory", cwd);
     }
     
     // Execute the command
@@ -640,17 +647,34 @@ pub async fn execute_command(command: String, cwd: Option<String>) -> Result<Str
             let stdout = String::from_utf8_lossy(&output.stdout).to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
             
+            println!("Command execution status: {}", output.status);
+            println!("stdout length: {}, stderr length: {}", stdout.len(), stderr.len());
+            
             if !stderr.is_empty() {
                 if output.status.success() {
                     Ok(format!("{}\n\nWarnings:\n{}", stdout, stderr))
                 } else {
                     Err(format!("Command failed with error:\n{}", stderr))
                 }
+            } else if stdout.is_empty() && !output.status.success() {
+                Err(format!("Command failed with no output. Exit code: {}", output.status))
             } else {
                 Ok(stdout)
             }
         },
-        Err(e) => Err(format!("Failed to execute command: {}", e)),
+        Err(e) => {
+            println!("Command execution error: {}", e);
+            
+            // Provide more helpful error message for common issues
+            let error_msg = e.to_string();
+            if error_msg.contains("not found") || error_msg.contains("No such file or directory") {
+                Err(format!("Program '{}' not found. Make sure it is installed and in your system PATH.", program))
+            } else if error_msg.contains("permission denied") {
+                Err(format!("Permission denied when trying to execute '{}'. Check file permissions.", program))
+            } else {
+                Err(format!("Failed to execute command: {}", e))
+            }
+        },
     }
 }
 

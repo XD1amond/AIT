@@ -79,10 +79,43 @@ export function ChatComponent({
                                         : 'mr-auto bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100'
                                 }`}
                             >
-                                {/* Render newlines correctly */}
-                                {msg.content.split('\n').map((line, i) => (
-                                    <p key={i} style={{ minHeight: '1em' }}>{line || '\u00A0'}</p>
-                                ))}
+                                {/* Render messages with basic formatting */}
+                                <div className={msg.sender === 'ai' ? "markdown-content prose prose-sm dark:prose-invert max-w-none" : ""}>
+                                    {msg.content.split('\n').map((line, i) => {
+                                        // Basic markdown-like formatting for AI messages
+                                        if (msg.sender === 'ai') {
+                                            // Handle headers
+                                            if (line.startsWith('# ')) {
+                                                return <h1 key={i} className="text-xl font-bold mt-2 mb-1">{line.substring(2)}</h1>;
+                                            } else if (line.startsWith('## ')) {
+                                                return <h2 key={i} className="text-lg font-bold mt-2 mb-1">{line.substring(3)}</h2>;
+                                            } else if (line.startsWith('### ')) {
+                                                return <h3 key={i} className="text-md font-bold mt-2 mb-1">{line.substring(4)}</h3>;
+                                            }
+                                            
+                                            // Handle code blocks (simple version)
+                                            if (line.startsWith('```') || line.startsWith('`')) {
+                                                return (
+                                                    <pre key={i} className="bg-gray-800 dark:bg-gray-900 rounded p-2 overflow-x-auto my-2">
+                                                        <code>{line.replace(/^```|```$/g, '')}</code>
+                                                    </pre>
+                                                );
+                                            }
+                                            
+                                            // Handle bullet points
+                                            if (line.startsWith('- ') || line.startsWith('* ')) {
+                                                return <li key={i} className="ml-4">{line.substring(2)}</li>;
+                                            }
+                                            
+                                            // Default paragraph
+                                            return <p key={i} style={{ minHeight: '1em' }}>{line || '\u00A0'}</p>;
+                                        } else {
+                                            // User messages with simple newlines
+                                            return <p key={i} style={{ minHeight: '1em' }}>{line || '\u00A0'}</p>;
+                                        }
+                                    })}
+                                </div>
+                                
                                 {/* Optionally display tool info if present */}
                                 {msg.type === 'tool-request' && msg.toolUse && (
                                     <div className="mt-2 text-xs opacity-80 border-t border-amber-300 dark:border-amber-700 pt-1">

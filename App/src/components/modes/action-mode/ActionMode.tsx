@@ -271,8 +271,30 @@ export function ActionMode({
     try {
       // Get API key based on provider
       const provider = settings.action_provider;
-      // Access API key from settings prop
-      const apiKey = settings[`${provider}_api_key` as keyof AppSettings] as string | undefined;
+      
+      // Get API key using a switch statement like in WalkthroughMode
+      let apiKey: string | undefined;
+      
+      // Debug the provider and available keys
+      console.log("Action Mode Provider:", provider);
+      console.log("Available API Keys:", {
+        openai: settings.openai_api_key ? "Set" : "Not Set",
+        claude: settings.claude_api_key ? "Set" : "Not Set",
+        openrouter: settings.open_router_api_key ? "Set" : "Not Set",
+        gemini: settings.gemini_api_key ? "Set" : "Not Set",
+        deepseek: settings.deepseek_api_key ? "Set" : "Not Set"
+      });
+      
+      switch (provider) {
+          case 'openai': apiKey = settings.openai_api_key; break;
+          case 'claude': apiKey = settings.claude_api_key; break;
+          case 'openrouter': apiKey = settings.open_router_api_key; break;
+          case 'gemini': apiKey = settings.gemini_api_key; break;
+          case 'deepseek': apiKey = settings.deepseek_api_key; break;
+          default: apiKey = undefined;
+      }
+      
+      console.log(`Selected provider: ${provider}, API key ${apiKey ? "is set" : "is NOT set"}`);
 
       if (!apiKey) {
           showErrorToast({

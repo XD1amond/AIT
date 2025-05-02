@@ -49,7 +49,7 @@ export function ToolApproval({ toolUse, onApprove, onReject, isOpen }: ToolAppro
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <pre className="bg-gray-100 dark:bg-gray-800 p-2 rounded text-sm overflow-auto max-h-60">
+              <pre className="bg-gray-100 dark:bg-gray-800 p-2 rounded text-sm overflow-auto max-h-60 whitespace-pre-wrap break-words">
                 {formatParams(toolUse.params)}
               </pre>
             </CardContent>
