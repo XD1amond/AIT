@@ -45,34 +45,30 @@ export function parseToolUse(text: string): ToolUse | null {
   
   // Special case for command tool
   if (toolName === 'command') {
-    // Special case for the specific test pattern
-    if (toolContent.trim() === '<command>ls -la</command>') {
-      params.command = 'ls -la';
-    } else if (toolContent.includes('<command>') && toolContent.includes('</command>')) {
-      // Extract the content between the nested command tags
-      const match = toolContent.match(/<command>([\s\S]*?)<\/command>/);
-      if (match && match[1]) {
-        // Remove any nested command tags if present
-        let commandValue = match[1].trim();
-        if (commandValue.includes('<command>')) {
-          const nestedMatch = commandValue.match(/<command>([\s\S]*?)<\/command>/);
-          if (nestedMatch && nestedMatch[1]) {
-            params.command = nestedMatch[1].trim();
-          } else {
-            params.command = commandValue;
-          }
-        } else {
-          params.command = commandValue;
-        }
+    // Extract command parameter
+    const commandRegex = /<command>([\s\S]*?)<\/command>/;
+    const commandMatch = commandRegex.exec(toolContent);
+    if (commandMatch) {
+      // Get the content between the command tags
+      let commandValue = commandMatch[1].trim();
+      
+      // Check if the command value itself contains command tags (nested)
+      const nestedCommandRegex = /<command>([\s\S]*?)<\/command>/;
+      const nestedCommandMatch = nestedCommandRegex.exec(commandValue);
+      if (nestedCommandMatch) {
+        // If there are nested command tags, use the content of the innermost tag
+        params.command = nestedCommandMatch[1].trim();
       } else {
-        params.command = toolContent.trim();
+        // Otherwise use the command value as is
+        params.command = commandValue;
       }
     } else {
-      // If no nested command tags, use the entire content
-      params.command = toolContent.trim();
+      // If no command tags, use the entire content but ensure it doesn't have XML tags
+      const plainCommand = toolContent.replace(/<[^>]*>/g, '').trim();
+      params.command = plainCommand || toolContent.trim();
     }
     
-    // Handle the cwd parameter
+    // Extract cwd parameter
     const cwdRegex = /<cwd>([\s\S]*?)<\/cwd>/;
     const cwdMatch = cwdRegex.exec(toolContent);
     if (cwdMatch) {

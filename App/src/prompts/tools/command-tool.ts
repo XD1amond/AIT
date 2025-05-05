@@ -19,16 +19,25 @@ export const commandTool: Tool = {
 ## command
 Description: Execute a command in the system's terminal
 Parameters:
-- command: (required) The command to execute
+- command: (required) The CLI command to execute. This should be valid for the current operating system.
 - cwd: (optional) The working directory to execute the command in
 
 Example:
 \`\`\`
-{
-  "command": "ls -la",
-  "cwd": "/home/user/documents"
-}
+<command>
+<command>ping google.com</command>
+</command>
 \`\`\`
+
+Example with working directory:
+\`\`\`
+<command>
+<command>ls -la</command>
+<cwd>/home/user/documents</cwd>
+</command>
+\`\`\`
+
+Note: Always use XML-style tags for parameters as shown above. The command parameter must be enclosed in <command></command> tags, and the optional cwd parameter must be enclosed in <cwd></cwd> tags.
 `;
   },
 
